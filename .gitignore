@@ -1,0 +1,58 @@
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+*.whl
+
+# ── Virtualenvs ─────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Test / coverage / type / lint caches ────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# ── Build / packaging ───────────────────────────────────────────────────
+_version.py
+.pdm-python
+pip-wheel-metadata/
+
+# ── Secrets / credentials (keypair auth, do NOT commit) ──────────────────
+.env
+.env.*
+*.pem
+*.p8
+*.key
+rsa_key*
+*private_key*
+
+# ── Local planning / working docs (not part of the repo) ────────────────
+PLAN_*.md
+HANDOVER_*.md
+TRACKING_*.md
+RESEARCH_*.md
+
+# ── Editor / OS ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ── Local tooling ───────────────────────────────────────────────────────
+.serena/
