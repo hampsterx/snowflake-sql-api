@@ -120,7 +120,9 @@ markers = [
 [tool.coverage.run]
 source = ["snowflake_sql_api"]
 branch = true
-omit = ["snowflake_sql_api/cli.py"]
+# cli.py is exercised end-to-end by the smoke suite; row_mapping.py is a Phase 8
+# stub. Both are out of the Phase 2 core-coverage scope.
+omit = ["snowflake_sql_api/cli.py", "snowflake_sql_api/row_mapping.py"]
 
 [tool.coverage.report]
 show_missing = true

@@ -1,19 +1,22 @@
 """Command-line interface: ``snowflake-sql-api query ...``.
 
-Thin wrapper over :class:`~snowflake_sql_api.client.SnowflakeClient`, reading
-connection settings from the environment. A basic ``query`` command lands in
-Phase 2; the full output formats (``--format table|csv|json|jsonl``, file
-input, spinner) arrive with the v0.2.0 toolkit (Phase 8).
-
-Scaffold only.
+A thin wrapper over :class:`~snowflake_sql_api.client.SnowflakeClient`, reading
+connection settings from the environment (``SNOWFLAKE_*``). This is the basic
+JSON-output ``query`` command; richer output formats (``--format
+table|csv|json|jsonl``, file input, spinner) arrive with the v0.2.0 toolkit.
 """
 
 from __future__ import annotations
 
 import argparse
-from typing import Optional, Sequence
+import json
+import sys
+from datetime import date, datetime, time
+from decimal import Decimal
+from typing import Any, Optional, Sequence
 
 from . import __version__
+from .exceptions import SnowflakeError
 
 __all__ = ["main", "build_parser"]
 
@@ -32,6 +35,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _json_default(value: Any) -> str:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).hex()
+    raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _run_query(sql: str) -> int:
+    from .client import SnowflakeClient
+
+    try:
+        with SnowflakeClient.from_env() as client:
+            rows = client.query(sql)
+    except SnowflakeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(rows, default=_json_default, indent=2))
+    return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = build_parser()
@@ -40,11 +66,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command is None:
         parser.print_help()
         return 2
-
     if args.command == "query":
-        # Wired to SnowflakeClient in Phase 2.
-        parser.error("the 'query' command is not implemented yet (lands in Phase 2)")
-
+        return _run_query(args.sql)
     return 0
 
 
