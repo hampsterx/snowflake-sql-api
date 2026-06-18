@@ -10,6 +10,14 @@ git clone https://github.com/hampsterx/snowflake-sql-api
 cd snowflake-sql-api
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
+pre-commit install
+```
+
+`pre-commit install` wires the lint/format/type/secret hooks to run on every
+commit. Run the full set against the whole tree at any time:
+
+```bash
+pre-commit run --all-files
 ```
 
 ## Before opening a PR
@@ -18,10 +26,15 @@ pip install -e '.[dev]'
 ruff check snowflake_sql_api tests
 black --check snowflake_sql_api tests
 mypy snowflake_sql_api
-pytest --cov=snowflake_sql_api --cov-report=term-missing
+coverage run -m pytest && coverage report
 ```
 
-All four must pass. CI runs the same checks across Python 3.9-3.13.
+All four must pass (and `pre-commit run --all-files` is clean). Use `coverage run
+-m pytest`, not `pytest --cov`: the package ships a pytest plugin
+(`snowflake_sql_api.testing`), and `coverage run` starts tracing before that
+plugin is imported so import-time lines are measured correctly. The coverage gate
+is enforced (`fail_under = 89` in `pyproject.toml`); `coverage report` exits
+non-zero below it. CI runs the same checks across Python 3.9-3.13.
 
 Checklist:
 

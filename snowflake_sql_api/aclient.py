@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import httpx
+
 from .auth import KeypairAuthenticator, account_hostname
 from .bindings import to_bindings
 from .client import DEFAULT_POLL_TIMEOUT, _columns_from, _rows_affected
@@ -93,6 +95,7 @@ class AsyncSnowflakeClient:
         retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
         user_agent: Optional[str] = None,
         on_query: Optional[OnQuery] = None,
+        http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         if private_key is None and private_key_path is None:
             raise SnowflakeConfigError("a private_key or private_key_path is required")
@@ -122,6 +125,7 @@ class AsyncSnowflakeClient:
             timeout=timeout,
             retry_policy=retry_policy,
             user_agent=user_agent,
+            client=http_client,
         )
 
     @classmethod

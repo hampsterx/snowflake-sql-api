@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import httpx
+
 from .auth import KeypairAuthenticator, account_hostname
 from .bindings import to_bindings
 from .escaping import quote_identifier, quote_name
@@ -131,6 +133,7 @@ class SnowflakeClient:
         retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
         user_agent: Optional[str] = None,
         on_query: Optional[OnQuery] = None,
+        http_client: Optional[httpx.Client] = None,
     ) -> None:
         if private_key is None and private_key_path is None:
             raise SnowflakeConfigError("a private_key or private_key_path is required")
@@ -160,6 +163,7 @@ class SnowflakeClient:
             timeout=timeout,
             retry_policy=retry_policy,
             user_agent=user_agent,
+            client=http_client,
         )
 
     @classmethod

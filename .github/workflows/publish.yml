@@ -1,13 +1,12 @@
-name: CI
+name: Publish to PyPI
 
+# Tag-driven release. Push a `vX.Y.Z` tag and this builds the sdist/wheel
+# (version derived from the tag by hatch-vcs) and uploads to PyPI via OIDC
+# trusted publishing. See RELEASING.md.
 on:
   push:
-    branches: [master, main]
-  pull_request:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    tags:
+      - "v*"
 
 jobs:
   lint:
@@ -50,10 +49,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
       - name: pytest
-        # Use `coverage run` (not `pytest --cov`) so tracing starts before the
-        # package's own pytest11 plugin (snowflake_sql_api.testing) is imported;
-        # otherwise import-time lines read as uncovered. The 89% gate lives in
-        # pyproject.toml [tool.coverage.report] fail_under.
+        # See CI: `coverage run` so tracing precedes the pytest11 plugin import.
         run: |
           coverage run -m pytest
           coverage report
+
+  publish:
+    name: Build and publish
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC trusted publishing; no API token needed
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs needs the tag (and history) to derive the version.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Check distribution metadata
+        run: twine check dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
