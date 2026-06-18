@@ -43,7 +43,7 @@ dev = [
     "ruff>=0.4",
     # Capped below 25.10: 25.12.0+ drop Python 3.9, which the package still
     # supports. Keeps CI and the pinned pre-commit hook on the same black.
-    "black>=24.0,<25.10",
+    "black>=24.0,<25.12",
     "mypy>=1.8",
     "build>=1.0",
     "pre-commit>=3.5",
