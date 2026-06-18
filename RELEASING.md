@@ -29,6 +29,13 @@ Pushing the tag triggers `.github/workflows/publish.yml`, which:
 2. Builds the sdist and wheel (`python -m build`); the version reflects the tag.
 3. Runs `twine check dist/*`.
 4. Publishes to PyPI via OIDC trusted publishing (no API token).
+5. Creates a GitHub Release for the tag with notes auto-generated from the merged
+   PRs since the previous tag.
+
+A GitHub Release is part of every release, not an optional extra: the workflow
+creates one automatically (step 5). After the run, edit the release on GitHub to
+add a short highlights section if the auto-generated PR list needs framing. For
+the very first release (no prior tag to diff against), write the notes by hand.
 
 ## One-time prerequisites
 
