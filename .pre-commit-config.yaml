@@ -1,0 +1,39 @@
+# Pre-commit hooks for snowflake-sql-api. Install with `pre-commit install`
+# (the hook then runs on every commit); run the full set with
+# `pre-commit run --all-files`. Hook versions track the `[dev]` floors in
+# pyproject.toml.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff-check
+
+  - repo: https://github.com/psf/black
+    # Last black that still runs on Python 3.9 (the project's runtime floor);
+    # 25.12.0+ require 3.10+. Kept in sync with the [dev] cap in pyproject.toml.
+    rev: 25.9.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      # Keypair auth: belt-and-braces with the *.p8 / *.pem .gitignore rules.
+      - id: detect-private-key
+
+  # mypy runs as a local hook (not the mirror) so it resolves project imports
+  # and stubs from the installed dev environment, matching the CI invocation.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy snowflake_sql_api
+        language: system
+        types: [python]
+        pass_filenames: false

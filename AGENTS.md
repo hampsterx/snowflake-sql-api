@@ -38,6 +38,7 @@ Module layout under `snowflake_sql_api/` (clean separation, `py.typed`):
 | `aclient.py` | Asynchronous client (same surface, `await`-based) |
 | `row_mapping.py` | Optional dataclass / Pydantic row mapping |
 | `cli.py` | Command-line interface (`snowflake-sql-api query ...`) |
+| `testing.py` | Shipped test helper: `FakeSnowflake` (httpx.MockTransport), `make_client`/`make_async_client`, pytest fixtures (pytest11) |
 
 ### Dependencies
 
@@ -52,21 +53,23 @@ than failing at import time.
 ## Development Commands
 
 ```bash
-# Install in editable mode with dev tooling
+# Install in editable mode with dev tooling, then wire the git hooks
 pip install -e '.[dev]'
+pre-commit install
 
-# Run tests with coverage
-pytest --cov=snowflake_sql_api --cov-report=term-missing
+# Run tests with coverage (NOT `pytest --cov`; see Known Quirks)
+coverage run -m pytest && coverage report
 
 # Run only the known-bug regression tests
 pytest -k regression
 
-# Lint / format / type-check
+# Lint / format / type-check (or run all hooks at once)
 ruff check snowflake_sql_api tests
 black --check snowflake_sql_api tests
 mypy snowflake_sql_api
+pre-commit run --all-files
 
-# Build a distribution
+# Build a distribution (version comes from the git tag via hatch-vcs)
 python -m build
 ```
 
@@ -89,18 +92,90 @@ private keys, `.gitignore` excludes `*.pem` / `*.p8` / `*private_key*`.
 - **Correctness over surface.** Type coercion and partition handling are
   correctness-critical, prefer well-tested core behavior to breadth.
 
+## Known Quirks
+
+Behaviour that looks wrong but is intentional. Do not "fix" these without reading
+the linked regression test first.
+
+- **Account locator: claim vs host** (`auth.py`). The JWT claim account
+  (`iss`/`sub`) strips the region/cloud suffix and uppercases
+  (`xy12345.ap-southeast-2` -> `XY12345`); the API host keeps the full account
+  (`xy12345.ap-southeast-2.snowflakecomputing.com`). Conflating them breaks JWT
+  validation. `normalize_account_locator` vs `account_hostname`. Regression:
+  `test_regression_bug1`.
+- **`result(poll=False)` raises on 202** (`client.py` / `aclient.py`
+  `_collect`). A still-running async statement must raise `ResultNotReady`, never
+  return its in-progress HTTP 202 body as if it were a result set. Regression:
+  `test_regression_bug3`.
+- **Fetch every partition, in order** (`pagination.py`). `query` returns
+  partition 0 (inline) plus partitions 1..N (fetched by index). Stopping at
+  partition 0 silently truncates large results. Regression:
+  `test_regression_bug4`.
+- **`on_query` streaming hook is deferred** to the v0.2.0 toolkit
+  (`query_stream`, Phase 8). The hook fires for `query`/`execute`/`submit` today;
+  there is no streaming path yet, so no regression test until the feature lands
+  (this is spike bug #2, intentionally not yet covered).
+- **No PEP 604 unions at runtime** (py3.9 floor). ruff's `UP` (pyupgrade) rule is
+  omitted on purpose: it would rewrite `Optional[...]` / `Union[...]` to
+  `X | None`, which raises at import time on 3.9 for typing generics (PEP 604 on
+  generics is 3.10+). Keep `from __future__ import annotations` plus
+  `Optional`/`Union`.
+- **mypy `python_version = "3.10"` vs the 3.9-3.13 matrix.** 3.10 is the lowest
+  this mypy accepts; true 3.9 runtime compatibility is enforced by the pytest
+  matrix, which imports every module under 3.9.
+- **Coverage uses `coverage run`, not `pytest --cov`.** The package ships a pytest
+  plugin via the `pytest11` entry point, so `snowflake_sql_api.testing` (and the
+  whole package) is imported at plugin-load time, before pytest-cov starts
+  tracing. `pytest --cov` then reports import-time lines as uncovered (~20 points
+  lost). `coverage run -m pytest` starts tracing first. The 89% gate lives in
+  `pyproject.toml` `[tool.coverage.report] fail_under`.
+
 ## Testing
 
 - Unit tests mock the HTTP layer; no network access required for the default suite.
+- Mock the client in your own tests with the shipped `snowflake_sql_api.testing`
+  helper (`FakeSnowflake` + `make_client`/`make_async_client`, or the
+  auto-registered `fake_snowflake` / `snowflake_client` / `async_snowflake_client`
+  fixtures). No respx. See `docs/testing.md`.
 - Each fixed bug gets a named regression test (`test_regression_*`) so it cannot
   silently return.
-- Target coverage: >= 89%, enforced in CI across Python 3.9-3.13.
+- Target coverage: >= 89%, enforced across Python 3.9-3.13. Run with
+  `coverage run -m pytest && coverage report` (see Known Quirks).
+
+## Common Mistakes
+
+- Hand-editing a version string. The version comes from the git tag (hatch-vcs);
+  `_version.py` is generated and gitignored. A feature PR must not touch it. See
+  `RELEASING.md`.
+- Running `pytest --cov` and reacting to the false coverage drop. Use
+  `coverage run -m pytest`.
+- Adding a runtime dependency without strong justification. The small
+  install / fast cold start is the whole point; new optional features go behind
+  an extra.
+- Rewriting `Optional[...]` to `X | None` (breaks the 3.9 runtime).
+- Conflating the JWT claim account with the API host (see Known Quirks).
+- Forgetting the async counterpart of a sync change (sync/async parity).
+- Forgetting a `test_regression_*` for a fixed bug.
+
+## Before Finishing
+
+1. `pre-commit run --all-files` is clean (ruff, black, mypy, yaml/toml, private-key).
+2. `coverage run -m pytest && coverage report` passes and coverage holds >= 89%.
+3. Sync/async parity: any client change has its counterpart, or a stated reason.
+4. Fixed bugs have a `test_regression_*`; public API changes are in the
+   README / `docs/`.
+
+## Security
+
+Report vulnerabilities privately, see [SECURITY.md](SECURITY.md). Never commit
+private keys (`.gitignore` and a `detect-private-key` pre-commit hook guard
+this).
 
 ## Contributing
 
 Before opening a PR:
 
-- [ ] Tests pass (`pytest --cov`) and coverage holds.
+- [ ] Tests pass (`coverage run -m pytest && coverage report`) and coverage holds.
 - [ ] Formatted (`black`) and linted (`ruff`), type hints on public APIs (`mypy`).
 - [ ] No hardcoded account/region/role/warehouse values; configuration is generic.
 - [ ] Public API changes documented in the README.
