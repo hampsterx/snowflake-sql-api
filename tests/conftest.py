@@ -25,6 +25,12 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 PASSPHRASE = b"correct horse battery staple"
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Load shipped testing fixtures when pytest11 entry points are unavailable."""
+    if not config.pluginmanager.hasplugin("snowflake_sql_api"):
+        config.pluginmanager.import_plugin("snowflake_sql_api.testing")
+
+
 @pytest.fixture
 def fake_account() -> str:
     """A region-suffixed account locator for auth-normalization tests."""

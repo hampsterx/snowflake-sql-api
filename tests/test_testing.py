@@ -46,6 +46,7 @@ def test_make_client_returns_real_client() -> None:
     assert isinstance(client, SnowflakeClient)
     assert client.query_scalar("SELECT 1") == 1
     client.close()
+    assert client._transport._client.is_closed
 
 
 def test_make_client_rejects_managed_kwargs() -> None:
@@ -304,6 +305,7 @@ async def test_async_query() -> None:
     assert isinstance(client, AsyncSnowflakeClient)
     assert await client.query("SELECT id FROM t") == [{"ID": 1}, {"ID": 2}]
     await client.aclose()
+    assert client._transport._client.is_closed
 
 
 async def test_async_submit_and_result() -> None:
