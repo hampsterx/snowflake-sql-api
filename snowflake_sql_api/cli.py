@@ -68,7 +68,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     if args.command == "query":
         return _run_query(args.sql)
-    return 0
+    return 0  # pragma: no cover - argparse only yields None or a known subcommand
 
 
 if __name__ == "__main__":  # pragma: no cover
