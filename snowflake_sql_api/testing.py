@@ -599,7 +599,7 @@ def make_client(
     from .client import SnowflakeClient
 
     _reject_managed_kwargs("make_client", kwargs)
-    return SnowflakeClient(
+    client = SnowflakeClient(
         account,
         user,
         private_key=_throwaway_key(),
@@ -607,6 +607,8 @@ def make_client(
         poll_interval=poll_interval,
         **kwargs,
     )
+    client._transport._owns_client = True
+    return client
 
 
 def make_async_client(
@@ -621,7 +623,7 @@ def make_async_client(
     from .aclient import AsyncSnowflakeClient
 
     _reject_managed_kwargs("make_async_client", kwargs)
-    return AsyncSnowflakeClient(
+    client = AsyncSnowflakeClient(
         account,
         user,
         private_key=_throwaway_key(),
@@ -629,6 +631,8 @@ def make_async_client(
         poll_interval=poll_interval,
         **kwargs,
     )
+    client._transport._owns_client = True
+    return client
 
 
 # ---------------------------------------------------------------------------
