@@ -8,9 +8,10 @@ A lightweight, pure-Python client for [Snowflake's SQL API v2](https://docs.snow
 ## Why
 
 The official [`snowflake-connector-python`](https://pypi.org/project/snowflake-connector-python/)
-is ~75 MB installed (150 MB with pandas/pyarrow), has an 8-20 s cold start, and
-ships a compiled extension that slows container builds. For serverless and AWS
-Lambda workloads that only need to run SQL, that is a lot of weight.
+is ~75 MB installed (150 MB with pandas/pyarrow) and ships a compiled extension
+that slows container builds and inflates cold starts (its import alone is ~1.5 s
+versus ~0.3 s for this client). For serverless and AWS Lambda workloads that only
+need to run SQL, that is a lot of weight.
 
 `snowflake-sql-api` talks to Snowflake's SQL API over plain HTTP (`httpx`), so it
 stays small and cold-starts quickly. Core dependencies: `httpx`, `PyJWT`,

@@ -9,9 +9,10 @@ Code (via `CLAUDE.md`), Codex CLI, and humans.
 [SQL API v2](https://docs.snowflake.com/en/developer-guide/sql-api/index) (the
 `POST /api/v2/statements` REST endpoint). It exists as a small, fast alternative
 to the official `snowflake-connector-python`, which is ~75 MB installed (150 MB
-with pandas/pyarrow), has an 8-20 s cold start, and ships a C extension that slows
-container builds. This client is pure Python over `httpx`, so it is small and
-quick to cold-start, which matters in serverless / Lambda environments.
+with pandas/pyarrow) and ships a C extension that slows container builds and
+inflates cold starts (its import alone is ~1.5 s versus ~0.3 s for this client).
+This client is pure Python over `httpx`, so it is small and quick to cold-start,
+which matters in serverless / Lambda environments.
 
 It offers both **synchronous and asynchronous** clients, keypair (JWT) auth, type
 coercion, multi-partition result handling, a CLI, and optional pandas / typed-row
