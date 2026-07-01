@@ -64,9 +64,7 @@ class _Recorder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 sys.meta_path.insert(0, _Recorder())
 import snowflake_sql_api  # noqa: F401
 print(",".join(sorted(set(attempted))))
-""".format(
-    forbidden=FORBIDDEN_ON_BARE_IMPORT
-)
+""".format(forbidden=FORBIDDEN_ON_BARE_IMPORT)
 
 _TIMING_SCRIPT = """
 import time
