@@ -80,7 +80,7 @@ jobs:
       - name: Check distribution metadata
         run: twine check dist/*
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
       - name: Create GitHub Release
         # Runs only after a successful publish. Notes are auto-generated from the
         # merged PRs since the previous tag; edit the release afterwards to add
