@@ -27,8 +27,10 @@ except ImportError:  # pragma: no cover - plain source checkout, never built
         __version__ = "0.0.0.dev0"
 
 from .aclient import AsyncQueryHandle, AsyncSnowflakeClient
+from .batches import BatchSummary, BatchWriteResult, FailedBatch
 from .client import QueryHandle, SnowflakeClient
 from .exceptions import (
+    BatchWriteError,
     ResultNotReady,
     SnowflakeAuthError,
     SnowflakeConfigError,
@@ -48,6 +50,10 @@ __all__ = [
     "QueryHandle",
     "AsyncQueryHandle",
     "RetryPolicy",
+    "BatchSummary",
+    "BatchWriteResult",
+    "FailedBatch",
+    "BatchWriteError",
     "SnowflakeError",
     "SnowflakeConfigError",
     "SnowflakeAuthError",

@@ -79,7 +79,8 @@ with SnowflakeClient(account="myorg-myaccount", user="MY_USER",
 | `query_scalar(sql, params)` | first column of the first row, or `None` |
 | `query_column(sql, params)` | first column across all rows |
 | `execute(sql, params)` | rows affected (DML/DDL) |
-| `insert_many(table, columns, rows)` | rows inserted (batched, bound) |
+| `insert_many(table, columns, rows)` | rows inserted by one bound multi-row statement |
+| `insert_batches(table, columns, rows, max_rows=1000, max_bytes=1_000_000)` | confirmed progress across bounded INSERT statements |
 | `submit(sql, params)` | a `QueryHandle` for a long-running statement |
 | `query_stream(sql, params)` | a lazy generator of converted rows |
 | `query_batches(sql, params, batch_size=1000)` | lazy batches of at most the requested row count |
@@ -93,6 +94,12 @@ Streams submit on first iteration and fetch later result partitions on demand.
 Use `async for` directly with the async streaming methods and await async export
 methods. See [streaming.md](streaming.md) for memory limits, file examples, and
 failure behavior.
+
+`insert_batches()` consumes an ordinary iterable once and submits bounded,
+sequential INSERT statements. Earlier batches can commit before a later failure;
+`BatchWriteError` carries confirmed progress and uncertain outcomes. Use
+`insert_many()` when you want one statement. See [batch-writes.md](batch-writes.md)
+for byte budgets, async input and recovery.
 
 ## Configuration from the environment
 

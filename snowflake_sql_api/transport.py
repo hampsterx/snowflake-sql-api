@@ -43,11 +43,18 @@ def _default_user_agent() -> str:
 class StatementResponse:
     """A decoded SQL API response: HTTP status plus the parsed JSON body."""
 
-    __slots__ = ("status_code", "body")
+    __slots__ = ("status_code", "body", "submission_attempts", "_submission_handle")
 
-    def __init__(self, status_code: int, body: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        body: Dict[str, Any],
+        submission_attempts: Optional[int] = None,
+    ) -> None:
         self.status_code = status_code
         self.body = body
+        self.submission_attempts = submission_attempts
+        self._submission_handle: Optional[str] = None
 
     @property
     def is_running(self) -> bool:
@@ -56,7 +63,8 @@ class StatementResponse:
 
     @property
     def statement_handle(self) -> Optional[str]:
-        return self.body.get("statementHandle")
+        """Latest known handle, including a previous attempt of this submission."""
+        return self.body.get("statementHandle") or self._submission_handle
 
 
 def _json_body(response: httpx.Response) -> Dict[str, Any]:
@@ -85,7 +93,13 @@ def _interpret(response: httpx.Response) -> StatementResponse:
             statement_handle=body.get("statementHandle"),
         )
     if status == 401:
-        raise SnowflakeAuthError(body.get("message", "authentication failed"))
+        raise SnowflakeAuthError(
+            body.get("message", "authentication failed"),
+            status_code=status,
+            code=body.get("code"),
+            sql_state=body.get("sqlState"),
+            statement_handle=body.get("statementHandle"),
+        )
     if status == 403:
         raise SnowflakeForbiddenError(
             body.get("message", "request forbidden"),
@@ -110,6 +124,8 @@ def _retry_error(response: httpx.Response) -> SnowflakeRequestError:
         body.get("message", f"HTTP {response.status_code}"),
         status_code=response.status_code,
         code=body.get("code"),
+        sql_state=body.get("sqlState"),
+        statement_handle=body.get("statementHandle"),
     )
 
 
@@ -175,14 +191,20 @@ class Transport(_TransportBase):
         self._owns_client = client is None
 
     def submit(
-        self, payload: Dict[str, Any], *, request_id: str, async_exec: bool = False
+        self,
+        payload: Dict[str, Any],
+        *,
+        request_id: str,
+        async_exec: bool = False,
+        content: Optional[bytes] = None,
     ) -> StatementResponse:
         """POST a statement, retrying idempotently on transient failure."""
         return self._send(
             "POST",
             STATEMENTS_PATH,
             params=self._submit_params(request_id, async_exec),
-            json=payload,
+            json=payload if content is None else None,
+            content=content,
             is_submit=True,
         )
 
@@ -206,29 +228,51 @@ class Transport(_TransportBase):
         *,
         params: Optional[Dict[str, str]] = None,
         json: Optional[Dict[str, Any]] = None,
+        content: Optional[bytes] = None,
         is_submit: bool = False,
     ) -> StatementResponse:
         url = self._base_url + path
-        last_exc: Optional[Exception] = None
-        for attempt in range(self._retry.max_attempts):
-            if attempt > 0:
-                if is_submit and params is not None:
-                    params = {**params, "retry": "true"}
-                time.sleep(self._retry.backoff_for(attempt - 1))
-            try:
-                response = self._client.request(
-                    method, url, params=params, json=json, headers=self._headers()
-                )
-            except httpx.TransportError as exc:
-                last_exc = exc
-                continue
-            if self._retry.should_retry_status(response.status_code):
-                last_exc = _retry_error(response)
-                continue
-            return _interpret(response)
-        raise SnowflakeRetryError(
-            f"retries exhausted after {self._retry.max_attempts} attempts"
-        ) from last_exc
+        attempts = 0
+        known_handle: Optional[str] = None
+        try:
+            last_exc: Optional[Exception] = None
+            for attempt in range(self._retry.max_attempts):
+                if attempt > 0:
+                    if is_submit and params is not None:
+                        params = {**params, "retry": "true"}
+                    time.sleep(self._retry.backoff_for(attempt - 1))
+                try:
+                    headers = self._headers()
+                    attempts += 1
+                    response = self._client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json,
+                        content=content,
+                        headers=headers,
+                    )
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    continue
+                if self._retry.should_retry_status(response.status_code):
+                    last_exc = _retry_error(response)
+                    if is_submit and last_exc.statement_handle:
+                        known_handle = last_exc.statement_handle
+                    continue
+                result = _interpret(response)
+                result.submission_attempts = attempts if is_submit else None
+                result._submission_handle = known_handle
+                return result
+            raise SnowflakeRetryError(
+                f"retries exhausted after {self._retry.max_attempts} attempts"
+            ) from last_exc
+        except Exception as exc:
+            # Preserve original exception identity, including HTTPX decoding errors.
+            exc.submission_attempts = attempts if is_submit else None  # type: ignore[attr-defined]
+            if known_handle and not getattr(exc, "statement_handle", None):
+                exc.statement_handle = known_handle  # type: ignore[attr-defined]
+            raise
 
     def close(self) -> None:
         if self._owns_client:
@@ -259,13 +303,19 @@ class AsyncTransport(_TransportBase):
         self._owns_client = client is None
 
     async def submit(
-        self, payload: Dict[str, Any], *, request_id: str, async_exec: bool = False
+        self,
+        payload: Dict[str, Any],
+        *,
+        request_id: str,
+        async_exec: bool = False,
+        content: Optional[bytes] = None,
     ) -> StatementResponse:
         return await self._send(
             "POST",
             STATEMENTS_PATH,
             params=self._submit_params(request_id, async_exec),
-            json=payload,
+            json=payload if content is None else None,
+            content=content,
             is_submit=True,
         )
 
@@ -288,29 +338,51 @@ class AsyncTransport(_TransportBase):
         *,
         params: Optional[Dict[str, str]] = None,
         json: Optional[Dict[str, Any]] = None,
+        content: Optional[bytes] = None,
         is_submit: bool = False,
     ) -> StatementResponse:
         url = self._base_url + path
-        last_exc: Optional[Exception] = None
-        for attempt in range(self._retry.max_attempts):
-            if attempt > 0:
-                if is_submit and params is not None:
-                    params = {**params, "retry": "true"}
-                await asyncio.sleep(self._retry.backoff_for(attempt - 1))
-            try:
-                response = await self._client.request(
-                    method, url, params=params, json=json, headers=self._headers()
-                )
-            except httpx.TransportError as exc:
-                last_exc = exc
-                continue
-            if self._retry.should_retry_status(response.status_code):
-                last_exc = _retry_error(response)
-                continue
-            return _interpret(response)
-        raise SnowflakeRetryError(
-            f"retries exhausted after {self._retry.max_attempts} attempts"
-        ) from last_exc
+        attempts = 0
+        known_handle: Optional[str] = None
+        try:
+            last_exc: Optional[Exception] = None
+            for attempt in range(self._retry.max_attempts):
+                if attempt > 0:
+                    if is_submit and params is not None:
+                        params = {**params, "retry": "true"}
+                    await asyncio.sleep(self._retry.backoff_for(attempt - 1))
+                try:
+                    headers = self._headers()
+                    attempts += 1
+                    response = await self._client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json,
+                        content=content,
+                        headers=headers,
+                    )
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    continue
+                if self._retry.should_retry_status(response.status_code):
+                    last_exc = _retry_error(response)
+                    if is_submit and last_exc.statement_handle:
+                        known_handle = last_exc.statement_handle
+                    continue
+                result = _interpret(response)
+                result.submission_attempts = attempts if is_submit else None
+                result._submission_handle = known_handle
+                return result
+            raise SnowflakeRetryError(
+                f"retries exhausted after {self._retry.max_attempts} attempts"
+            ) from last_exc
+        except Exception as exc:
+            # Preserve original exception identity, including HTTPX decoding errors.
+            exc.submission_attempts = attempts if is_submit else None  # type: ignore[attr-defined]
+            if known_handle and not getattr(exc, "statement_handle", None):
+                exc.statement_handle = known_handle  # type: ignore[attr-defined]
+            raise
 
     async def aclose(self) -> None:
         if self._owns_client:

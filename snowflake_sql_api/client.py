@@ -18,6 +18,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterable,
     List,
     Optional,
     Sequence,
@@ -28,6 +29,7 @@ from typing import (
 import httpx
 
 from .auth import KeypairAuthenticator, account_hostname
+from .batches import BatchWriteResult, _BatchExecution, _BatchPlanner
 from .bindings import to_bindings
 from .escaping import quote_identifier, quote_name
 from .exceptions import (
@@ -59,7 +61,16 @@ OnQuery = Callable[[str, "Params"], None]
 DEFAULT_POLL_TIMEOUT = 600.0
 
 
-def _rows_affected(body: Dict[str, Any]) -> int:
+def _affected_count(value: Any, strict: bool) -> int:
+    if strict and (isinstance(value, bool) or not isinstance(value, (int, str))):
+        raise ValueError("rows-affected count must be an integer")
+    count = int(value)
+    if strict and count < 0:
+        raise ValueError("rows-affected count must be nonnegative")
+    return count
+
+
+def _rows_affected(body: Dict[str, Any], *, strict: bool = False) -> int:
     """Extract the rows-affected count from a DML response."""
     stats = body.get("stats")
     if isinstance(stats, dict):
@@ -67,16 +78,19 @@ def _rows_affected(body: Dict[str, Any]) -> int:
         found = False
         for key in ("numRowsInserted", "numRowsUpdated", "numRowsDeleted"):
             if key in stats:
-                total += int(stats[key])
+                total += _affected_count(stats[key], strict)
                 found = True
         if found:
             return total
     data = body.get("data")
     if data and data[0]:
         try:
-            return int(data[0][0])
+            return _affected_count(data[0][0], strict)
         except (ValueError, TypeError):
-            pass
+            if strict:
+                raise
+    if strict:
+        raise ValueError("response has no rows-affected count")
     return 0
 
 
@@ -420,6 +434,52 @@ class SnowflakeClient:
         values_sql = ", ".join([placeholder] * len(rows))
         sql = f"INSERT INTO {quote_name(table)} ({cols_sql}) VALUES {values_sql}"
         return self.execute(sql, flat)
+
+    def insert_batches(
+        self,
+        table: str,
+        columns: Sequence[str],
+        rows: Iterable[Sequence[Any]],
+        *,
+        max_rows: int = 1000,
+        max_bytes: int = 1_000_000,
+    ) -> BatchWriteResult:
+        """Insert a single-pass source sequentially within row and wire-byte budgets.
+
+        Independent statements can commit before a later failure. BatchWriteError
+        reports confirmed progress and uncertain outcomes; see docs/batch-writes.md.
+        Input is an ordinary iterable, consumed on the calling thread.
+        """
+        planner = _BatchPlanner(
+            table, columns, rows, max_rows, max_bytes, self._build_payload
+        )
+        while (batch := planner.next_batch()) is not None:
+            try:
+                self._notify(batch.sql, batch.params)
+            except Exception as exc:
+                raise planner.error(exc, "validation") from exc
+            execution = _BatchExecution(planner, batch)
+            try:
+                response = self._transport.submit(
+                    {}, request_id=execution.failed.request_id, content=batch.content
+                )
+                execution.received(
+                    response.statement_handle,
+                    response.submission_attempts,
+                    response.is_running,
+                )
+                if response.is_running:
+                    handle = response.statement_handle
+                    if handle is None:
+                        raise SnowflakeRequestError("running statement has no handle")
+                    response = self._poll(handle, self._statement_timeout)
+                    execution.succeeded = True
+                affected = _rows_affected(response.body, strict=True)
+            except Exception as exc:
+                raise execution.error(exc) from exc
+            planner.confirm(batch, affected)
+            del batch
+        return planner.result()
 
     # -- async submit -----------------------------------------------------
 

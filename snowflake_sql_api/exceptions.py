@@ -7,10 +7,15 @@ HTTP responses onto these types; see :mod:`snowflake_sql_api.transport`.
 
 from __future__ import annotations
 
-from typing import Optional
+from functools import partial
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .batches import BatchOutcome, BatchPhase, BatchWriteResult, FailedBatch
 
 __all__ = [
     "SnowflakeError",
+    "BatchWriteError",
     "SnowflakeConfigError",
     "SnowflakeAuthError",
     "SnowflakeRequestError",
@@ -23,7 +28,54 @@ __all__ = [
 
 
 class SnowflakeError(Exception):
-    """Base class for every error raised by this library."""
+    """Base class for every error raised by this library.
+
+    ``submission_attempts`` counts actual parent POST attempts, or is None for
+    errors outside statement submission (including GET requests).
+    """
+
+    def __init__(
+        self, *args: object, submission_attempts: Optional[int] = None
+    ) -> None:
+        super().__init__(*args)
+        self.submission_attempts = submission_attempts
+
+
+class BatchWriteError(SnowflakeError):
+    """A batch import stopped; inspect confirmed progress and reconcile unknown writes."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        completed: BatchWriteResult,
+        next_row_index: int,
+        consumed_rows: int,
+        failed_batch: Optional[FailedBatch],
+        phase: BatchPhase,
+        outcome: BatchOutcome,
+    ) -> None:
+        super().__init__(message)
+        self.completed = completed
+        self.next_row_index = next_row_index
+        self.consumed_rows = consumed_rows
+        self.failed_batch = failed_batch
+        self.phase = phase
+        self.outcome = outcome
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        fields = {
+            key: getattr(self, key)
+            for key in (
+                "completed",
+                "next_row_index",
+                "consumed_rows",
+                "failed_batch",
+                "phase",
+                "outcome",
+            )
+        }
+        return partial(type(self), **fields), self.args, self.__dict__
 
 
 class SnowflakeConfigError(SnowflakeError):
@@ -35,7 +87,26 @@ class SnowflakeConfigError(SnowflakeError):
 
 
 class SnowflakeAuthError(SnowflakeError):
-    """Keypair JWT generation or Snowflake authentication failed."""
+    """Snowflake rejected authentication (HTTP 401).
+
+    Carries the server envelope. Local JWT signing errors propagate with their
+    original types instead of being converted to this exception.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        status_code: Optional[int] = None,
+        code: Optional[str] = None,
+        sql_state: Optional[str] = None,
+        statement_handle: Optional[str] = None,
+        submission_attempts: Optional[int] = None,
+    ) -> None:
+        super().__init__(*args, submission_attempts=submission_attempts)
+        self.status_code = status_code
+        self.code = code
+        self.sql_state = sql_state
+        self.statement_handle = statement_handle
 
 
 class SnowflakeRequestError(SnowflakeError):
@@ -54,8 +125,9 @@ class SnowflakeRequestError(SnowflakeError):
         sql_state: Optional[str] = None,
         request_id: Optional[str] = None,
         statement_handle: Optional[str] = None,
+        submission_attempts: Optional[int] = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(message, submission_attempts=submission_attempts)
         self.status_code = status_code
         self.code = code
         self.sql_state = sql_state

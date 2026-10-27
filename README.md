@@ -91,6 +91,25 @@ with the largest decoded partition plus the application batch. See
 [streaming results and exports](docs/streaming.md) for row streams, async usage,
 serialization, and partial-output behavior.
 
+Insert a record stream in bounded requests:
+
+```python
+with SnowflakeClient.from_env() as client:
+    progress = client.insert_batches(
+        "events", ["id", "label"], ((i, f"event {i}") for i in range(2500)),
+        max_rows=1000, max_bytes=1_000_000,
+    )
+    print(progress.input_rows, progress.rows_affected)
+```
+
+`insert_many()` sends one statement; `insert_batches()` sends sequential statements
+and can partially complete. Its byte budget covers the exact JSON body. On failure,
+`BatchWriteError` reports confirmed progress, consumed input and the failed request's
+identity. Reconstruct replayable input and reconcile unknown outcomes before retrying;
+do not resume with the same advanced iterator. The async equivalent is awaited and
+accepts the same synchronous iterable, whose production can block the event loop.
+See [batch writes](docs/batch-writes.md) for limits and recovery semantics.
+
 ## Prior art and alternatives
 
 `snowflake-sql-api` is not the first REST-based Snowflake client. If it does not

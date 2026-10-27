@@ -7,7 +7,7 @@ types below.
 | Exception | Raised when |
 |-----------|-------------|
 | `SnowflakeConfigError` | bad/missing config, before any request (no key, unreadable key, missing extra) |
-| `SnowflakeAuthError` | JWT generation or Snowflake auth failed (HTTP 401) |
+| `SnowflakeAuthError` | Snowflake rejected authentication (HTTP 401); local JWT signing errors propagate with their original types |
 | `SnowflakeForbiddenError` | Snowflake refused an authenticated request (HTTP 403); a `SnowflakeRequestError` subclass |
 | `SnowflakeProgrammingError` | the SQL failed to compile or execute (HTTP 422) |
 | `SnowflakeRequestError` | an HTTP/protocol-level failure (carries `code`, `sql_state`, `status_code`) |

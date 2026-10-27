@@ -33,6 +33,7 @@ Module layout under `snowflake_sql_api/` (clean separation, `py.typed`):
 | `transport.py` | `httpx` sync + async request execution against `/api/v2/statements`, retry wiring |
 | `types.py` | Result-set type coercion (VARIANT, Decimal, datetime/date/time) |
 | `escaping.py`, `bindings.py` | Parameter binding, bind-value escaping, identifier quoting |
+| `batches.py` | Bounded INSERT planning, exact JSON body sizing, immutable progress and failed submission metadata |
 | `pagination.py` | Multi-partition result fetching (the SQL API splits large results into partitions) |
 | `exports.py` | CSV/JSONL serialization for caller-owned text sinks |
 | `exceptions.py` | Typed exception hierarchy |
