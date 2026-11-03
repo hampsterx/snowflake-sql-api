@@ -109,6 +109,14 @@ def _rows_affected(body: Dict[str, Any], *, strict: bool = False) -> int:
     return 0
 
 
+def _record_cancel_failure(
+    error: SnowflakeTimeoutError, handle: str, exc: Exception
+) -> None:
+    """Attach a failed best-effort cancel to the timeout without replacing it."""
+    error.cancel_error = exc
+    error.add_note(f"cancelling {handle} after the timeout failed: {exc!r}")
+
+
 def _columns_from(body: Dict[str, Any]) -> List[ColumnMeta]:
     metadata = body.get("resultSetMetaData") or {}
     return [ColumnMeta.from_row_type(rt) for rt in metadata.get("rowType", [])]
@@ -141,10 +149,14 @@ class QueryHandle:
 
         With ``poll=False`` and the statement still running, raises
         :class:`~snowflake_sql_api.exceptions.ResultNotReady` rather than
-        returning the in-progress 202 payload.
+        returning the in-progress 202 payload. A polling timeout raises
+        :class:`~snowflake_sql_api.exceptions.SnowflakeTimeoutError` and leaves
+        the statement running; call :meth:`cancel` to stop it.
         """
         response = self._client._transport.get_statement(self.statement_handle)
-        columns, raw_rows = self._client._collect(response, timeout=timeout, poll=poll)
+        columns, raw_rows = self._client._collect(
+            response, timeout=timeout, cancel_on_timeout=False, poll=poll
+        )
         return coerce_rows(raw_rows, columns)
 
     def status(self) -> str:
@@ -286,7 +298,16 @@ class SnowflakeClient:
             payload, request_id=request_id, async_exec=async_exec
         )
 
-    def _poll(self, handle: str, timeout: Optional[float]) -> StatementResponse:
+    def _poll(
+        self, handle: str, timeout: Optional[float], *, cancel_on_timeout: bool
+    ) -> StatementResponse:
+        """Poll ``handle`` until it finishes or the wait runs out.
+
+        ``cancel_on_timeout`` is True when the client started the statement on
+        its own behalf: nobody else holds the handle, so a timeout would leave
+        it running server-side with no owner. A caller-held handle is not
+        cancelled, since its owner may poll it again.
+        """
         wait = DEFAULT_POLL_TIMEOUT if timeout is None else timeout
         deadline = time.time() + wait
         while True:
@@ -294,9 +315,17 @@ class SnowflakeClient:
             if not response.is_running:
                 return response
             if time.time() >= deadline:
-                raise SnowflakeTimeoutError(
+                error = SnowflakeTimeoutError(
                     f"statement {handle} did not finish within {wait}s"
                 )
+                if cancel_on_timeout:
+                    try:
+                        self._transport.cancel(handle)
+                    except Exception as exc:
+                        _record_cancel_failure(error, handle, exc)
+                    else:
+                        error.add_note(f"cancellation requested for {handle}")
+                raise error
             time.sleep(self._poll_interval)
 
     def _prepare_result(
@@ -304,6 +333,7 @@ class SnowflakeClient:
         response: StatementResponse,
         *,
         timeout: Optional[float],
+        cancel_on_timeout: bool,
         poll: bool = True,
     ) -> Tuple[List[ColumnMeta], str, Dict[str, Any]]:
         if response.is_running:
@@ -312,7 +342,7 @@ class SnowflakeClient:
             handle = response.statement_handle
             if handle is None:
                 raise SnowflakeRequestError("running statement has no handle")
-            response = self._poll(handle, timeout)
+            response = self._poll(handle, timeout, cancel_on_timeout=cancel_on_timeout)
         body = response.body
         columns = _columns_from(body)
         handle = response.statement_handle
@@ -325,10 +355,11 @@ class SnowflakeClient:
         response: StatementResponse,
         *,
         timeout: Optional[float],
+        cancel_on_timeout: bool,
         poll: bool = True,
     ) -> Tuple[List[ColumnMeta], List[List[Any]]]:
         columns, handle, body = self._prepare_result(
-            response, timeout=timeout, poll=poll
+            response, timeout=timeout, cancel_on_timeout=cancel_on_timeout, poll=poll
         )
         return columns, fetch_all_partitions(self._transport, handle, body)
 
@@ -336,7 +367,9 @@ class SnowflakeClient:
         self, sql: str, params: Params
     ) -> Tuple[List[ColumnMeta], Generator[Row, None, None]]:
         columns, handle, body = self._prepare_result(
-            self._run(sql, params), timeout=self._statement_timeout
+            self._run(sql, params),
+            timeout=self._statement_timeout,
+            cancel_on_timeout=True,
         )
         return columns, iter_result_rows(self._transport, handle, body, columns)
 
@@ -345,7 +378,9 @@ class SnowflakeClient:
     def query(self, sql: str, params: Params = None) -> List[Row]:
         """Run ``sql`` and return all rows (fetching every partition)."""
         response = self._run(sql, params)
-        columns, raw_rows = self._collect(response, timeout=self._statement_timeout)
+        columns, raw_rows = self._collect(
+            response, timeout=self._statement_timeout, cancel_on_timeout=True
+        )
         return coerce_rows(raw_rows, columns)
 
     def query_stream(
@@ -428,7 +463,9 @@ class SnowflakeClient:
             handle = response.statement_handle
             if handle is None:
                 raise SnowflakeRequestError("running statement has no handle")
-            response = self._poll(handle, self._statement_timeout)
+            response = self._poll(
+                handle, self._statement_timeout, cancel_on_timeout=True
+            )
         return _rows_affected(response.body)
 
     def insert_many(
@@ -494,7 +531,9 @@ class SnowflakeClient:
                     handle = response.statement_handle
                     if handle is None:
                         raise SnowflakeRequestError("running statement has no handle")
-                    response = self._poll(handle, self._statement_timeout)
+                    response = self._poll(
+                        handle, self._statement_timeout, cancel_on_timeout=True
+                    )
                     execution.succeeded = True
                 affected = _rows_affected(response.body, strict=True)
             except Exception as exc:

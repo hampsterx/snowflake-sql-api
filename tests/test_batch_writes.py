@@ -357,11 +357,14 @@ async def test_batch_two_remote_fault_keeps_prefix_and_attempt_history(
 async def test_running_post_retains_parent_context_through_polling(
     async_mode, private_key_pem, post_retry, failure
 ):
-    requests, notes = [], []
+    requests, notes, cancels = [], [], []
     posts, gets = 0, 0
 
     def handler(request):
         nonlocal posts, gets
+        if request.url.path.endswith("/cancel"):
+            cancels.append(request.url.path)
+            return httpx.Response(200, json={"code": "090001"})
         requests.append(request)
         if request.method == "POST":
             posts += 1
@@ -408,6 +411,10 @@ async def test_running_post_retains_parent_context_through_polling(
     assert len(notes) == 1
     assert posts == 1 + int(post_retry)
     assert gets == (2 if failure == "success" else 1)
+    # A poll timeout cancels the statement it started, yet stays "unknown":
+    # the cancel can lose the race with a commit.
+    expected = ["/api/v2/statements/running-h/cancel"] if failure == "timeout" else []
+    assert cancels == expected
 
 
 async def test_retry_exhaustion_unknown_without_consuming_next_batch(

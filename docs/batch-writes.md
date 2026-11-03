@@ -138,11 +138,18 @@ do not carry between independent operations.
 batch. Do not resume using the same advanced iterator: reconstruct replayable
 input from that boundary and reconcile any unknown submission using its request
 ID and known statement handle before sending again. Failed SQL does not imply
-that the whole import is resumable. This method does not replay a completed prefix,
-create a new identity to retry an uncertain batch, or cancel a running statement
-automatically.
+that the whole import is resumable. This method does not replay a completed prefix
+or create a new identity to retry an uncertain batch.
 
-Cancellation and keyboard interruption propagate unchanged. Cancellation can
-leave the current submission uncertain, without a `BatchWriteError` checkpoint.
+When polling a running batch statement exceeds `statement_timeout` (or the
+default wait), the client makes one best-effort request to cancel that statement
+and then raises `BatchWriteError` with the `SnowflakeTimeoutError` as its cause.
+The outcome stays `unknown`: the statement can commit before the cancel reaches
+Snowflake, so reconcile it like any other unknown batch. A failed cancel request
+is kept on the timeout's `cancel_error` and does not change the outcome.
+
+Task cancellation and keyboard interruption propagate unchanged and do not cancel
+the server statement. They can leave the current submission uncertain, without a
+`BatchWriteError` checkpoint.
 Durable checkpoints, cancellation recovery, parallel writes, whole-import
 transactions, staging files, `COPY INTO` and upserts are outside this API.

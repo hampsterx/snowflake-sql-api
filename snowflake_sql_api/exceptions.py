@@ -156,7 +156,15 @@ class SnowflakeProgrammingError(SnowflakeRequestError):
 
 
 class SnowflakeTimeoutError(SnowflakeError):
-    """An HTTP request or a statement exceeded its timeout."""
+    """An HTTP request or a statement exceeded its timeout.
+
+    When the client gives up polling a statement it started itself, it asks
+    Snowflake to cancel that statement before raising. ``cancel_error`` holds
+    the exception that best-effort cancel raised, or is None when the cancel
+    request was accepted or not attempted. It is not the cause of the timeout.
+    """
+
+    cancel_error: Optional[BaseException] = None
 
 
 class SnowflakeRetryError(SnowflakeError):

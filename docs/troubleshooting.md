@@ -105,6 +105,25 @@ rows = handle.result()       # blocking: polls until done
 ```
 
 If a statement never finishes within the wait, you get `SnowflakeTimeoutError`.
+Who cancels it depends on who owns the statement handle:
+
+- **Calls that poll for you** (`query` and its helpers, `execute`, `insert_many`,
+  `insert_batches`, `query_stream`, `query_batches`, `export_csv`,
+  `export_jsonl`) started the statement themselves, so nobody else can stop it.
+  When the wait runs out they make one best-effort cancel request for that
+  statement, then raise the timeout. Without it, a statement submitted with no
+  `statement_timeout` would keep running server-side until the account's
+  `STATEMENT_TIMEOUT_IN_SECONDS` (two days by default). If the cancel request
+  itself fails, you still get the `SnowflakeTimeoutError`, with the cancel failure
+  on its `cancel_error` attribute and in its notes. The cancel can arrive after
+  the statement finished, so a DML statement that timed out may still have
+  committed.
+- **`QueryHandle.result()`** (and `AsyncQueryHandle.result()`) does not cancel on
+  timeout. You hold the handle and may poll it again later; call
+  `handle.cancel()` when you want the statement stopped.
+
+Setting `statement_timeout` also sends Snowflake a server-side `timeout`, so the
+statement stops on its own even if the client process dies before it can cancel.
 
 ## Large result sets (partitions)
 
