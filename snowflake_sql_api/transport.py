@@ -4,8 +4,9 @@ Owns the actual ``httpx`` calls (sync and async), status-code interpretation
 (200 success, 202 long-running/async, 422 execution failure, 401 auth,
 403 forbidden, 429/5xx retryable), the retry loop, and ``requestId`` reuse for
 idempotent retries. A retried submit re-POSTs the identical body with the same
-``requestId`` and ``retry=true`` so Snowflake deduplicates instead of
-double-applying DML.
+``requestId`` and ``retry=true``. Snowflake resolves identical submissions
+through retained statement history, with no unlimited replay window or
+application-wide exactly-once guarantee.
 
 Higher layers (``client``/``aclient``) talk to the transport, not to ``httpx``.
 """

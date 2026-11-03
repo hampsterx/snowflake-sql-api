@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 from contextlib import AsyncExitStack, asynccontextmanager
+from decimal import Decimal
 from uuid import UUID
 
 import httpx
@@ -488,3 +489,31 @@ async def test_live_adapter_discards_reply_before_worker_sees_handle(
     assert observation.handle == "saved-handle"
     assert observation.received_at is not None
     assert observation.forwarded == len(requests) == 1
+
+
+@pytest.mark.parametrize("operation", ["submit", "resubmit"])
+@pytest.mark.parametrize("failure", ["binding", "decoding"])
+async def test_non_library_submission_error_keeps_original_type_and_no_id(
+    async_mode, private_key_pem, operation, failure
+):
+    requests = []
+    original = httpx.DecodingError("invalid compressed response")
+
+    def respond(request):
+        requests.append(request)
+        raise original
+
+    params = [[Decimal("1.5")]] if failure == "binding" else [7, "queued"]
+    error_type = TypeError if failure == "binding" else httpx.DecodingError
+    async with client_for(async_mode, private_key_pem, respond) as client:
+        with pytest.raises(error_type) as caught:
+            await value(getattr(client, operation)(SQL, params, request_id=SAVED_ID))
+    assert getattr(caught.value, "request_id", None) is None
+    if failure == "binding":
+        assert requests == []
+    else:
+        assert caught.value is original
+        assert original.args == ("invalid compressed response",)
+        assert original.submission_attempts == 1
+        assert len(requests) == 1
+        assert requests[0].url.params["requestId"] == SAVED_ID

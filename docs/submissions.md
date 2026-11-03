@@ -31,10 +31,13 @@ set `retry=true`. `on_query` fires once per explicit submit/resubmit call, befor
 binding/HTTP, and never for individual HTTP retries, polling or attaching a known
 handle. It records an attempt, not proof of a new database execution.
 
-After ID allocation, library submission failures, including binding and
-missing-handle failures, expose `error.request_id`. Exception types, original
-arguments and chained causes remain intact. Callback exceptions and GET/poll
-failures do not gain submission metadata; correlate polling through the handle.
+After ID allocation, submission errors in the `SnowflakeError` family, including
+binding and missing-handle errors in that family, expose `error.request_id`.
+Exception types, original arguments and chained causes remain intact. Other
+exceptions, such as HTTPX decoding errors or `TypeError` when serializing nested
+bind inputs, propagate without a request ID. Durable work must allocate its own
+ID before submission. Callback exceptions and GET/poll failures do not gain a
+submission ID; correlate polling through the handle.
 The ID diagnostic adds no SQL, bind values, credentials or persistent records.
 Existing server messages and underlying causes remain available as before.
 

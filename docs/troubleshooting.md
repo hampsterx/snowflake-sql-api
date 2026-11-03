@@ -128,7 +128,8 @@ failed. For worker recovery, persist a caller-owned UUID and all inputs before
 `submit(..., request_id=...)`, then use `resubmit(..., request_id=...)` after an
 uncertain attempt. Use a saved statement handle directly when available. Do not
 repeat ordinary `submit()` with the same ID as a recovery recipe or silently
-allocate a new one. Submission errors and returned handles expose `request_id`;
+allocate a new one. Submission errors in the `SnowflakeError` family and returned
+handles expose `request_id`; other exceptions pass through without a request ID.
 GET/poll errors can be correlated through their handle instead.
 
 See [replayable submissions](submissions.md) for payload invariants, history and

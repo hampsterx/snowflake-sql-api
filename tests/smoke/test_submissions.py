@@ -196,11 +196,13 @@ async def test_lost_response_new_worker(
         )
         saved = json.loads(job)
         observation = LostResponse(saved["id"])
-        started = datetime.now(timezone.utc).isoformat()
+        record_property("started_utc", datetime.now(timezone.utc).isoformat())
+        record_property("original_state", original_state)
         async with worker(async_mode, connection, observation) as first:
             identity = await value(
                 first.query_one("SELECT CURRENT_ACCOUNT() AS A, CURRENT_USER() AS U")
             )
+            assert identity is not None and identity["A"] and identity["U"]
             with pytest.raises(SnowflakeRetryError) as caught:
                 await value(
                     first.submit(saved["sql"], saved["params"], request_id=saved["id"])
@@ -221,23 +223,21 @@ async def test_lost_response_new_worker(
             same_identity = await value(
                 second.query_one("SELECT CURRENT_ACCOUNT() AS A, CURRENT_USER() AS U")
             )
+            record_property("same_account_user", same_identity == identity)
             assert same_identity == identity
             replay_started = time.monotonic()
+            record_property(
+                "response_to_replay_seconds", replay_started - observation.received_at
+            )
             replay = await value(
                 second.resubmit(saved["sql"], saved["params"], request_id=saved["id"])
             )
             await value(replay.result(timeout=120))
         original.result(timeout=120)
         count = control.query_scalar(f"SELECT COUNT(*) FROM {name}")
-        assert count == 1
-        record_property("started_utc", started)
         record_property("finished_utc", datetime.now(timezone.utc).isoformat())
-        record_property(
-            "response_to_replay_seconds", replay_started - observation.received_at
-        )
-        record_property("same_account_user", same_identity == identity)
-        record_property("original_state", original_state)
         record_property("independent_row_count", count)
+        assert count == 1
     finally:
         if is_running:
             control.execute(f"DROP PROCEDURE {procedure}(NUMBER, VARCHAR)")
@@ -254,7 +254,7 @@ async def test_never_sent_id(async_mode, connection, table, record_property):
             }
         )
     )
-    started = datetime.now(timezone.utc).isoformat()
+    record_property("started_utc", datetime.now(timezone.utc).isoformat())
     async with worker(async_mode, connection) as client:
         # This is the first POST for the saved ID. Never fall back to submit().
         replay = await value(
@@ -262,17 +262,16 @@ async def test_never_sent_id(async_mode, connection, table, record_property):
         )
         await value(replay.result(timeout=120))
     count = control.query_scalar(f"SELECT COUNT(*) FROM {name}")
-    assert count == 1
-    record_property("started_utc", started)
     record_property("finished_utc", datetime.now(timezone.utc).isoformat())
     record_property("independent_row_count", count)
+    assert count == 1
 
 
 async def test_unchanged_sql_failure(async_mode, connection, table, record_property):
     name, control = table
     saved_id = str(uuid4())
     bad_sql = f"INSERT INTO {name}(missing_column) VALUES (?)"
-    errors = []
+    record_property("started_utc", datetime.now(timezone.utc).isoformat())
     for operation in ["submit", "resubmit"]:
         async with worker(async_mode, connection) as client:
             with pytest.raises(SnowflakeProgrammingError) as caught:
@@ -280,12 +279,12 @@ async def test_unchanged_sql_failure(async_mode, connection, table, record_prope
                     getattr(client, operation)(bad_sql, [9], request_id=saved_id)
                 )
                 await value(handle.result(timeout=120))
-            errors.append(caught.value)
-    assert control.query_scalar(f"SELECT COUNT(*) FROM {name}") == 0
-    record_property("original_error_code", errors[0].code)
-    record_property("replay_error_code", errors[1].code)
-    record_property("original_sql_state", errors[0].sql_state)
-    record_property("replay_sql_state", errors[1].sql_state)
+            prefix = "original" if operation == "submit" else "replay"
+            record_property(f"{prefix}_error_code", caught.value.code)
+            record_property(f"{prefix}_sql_state", caught.value.sql_state)
+    count = control.query_scalar(f"SELECT COUNT(*) FROM {name}")
+    record_property("failed_sql_row_count", count)
+    assert count == 0
     async with worker(async_mode, connection) as client:
         corrected = await value(
             client.submit(
@@ -295,4 +294,7 @@ async def test_unchanged_sql_failure(async_mode, connection, table, record_prope
             )
         )
         await value(corrected.result(timeout=120))
-    assert control.query_scalar(f"SELECT COUNT(*) FROM {name}") == 1
+    count = control.query_scalar(f"SELECT COUNT(*) FROM {name}")
+    record_property("corrected_sql_row_count", count)
+    record_property("finished_utc", datetime.now(timezone.utc).isoformat())
+    assert count == 1
