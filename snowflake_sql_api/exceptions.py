@@ -81,10 +81,10 @@ class BatchWriteError(SnowflakeError):
 
 
 class SnowflakeConfigError(SnowflakeError):
-    """Client constructed with invalid or missing configuration.
+    """Invalid client configuration or an unsupported result shape.
 
-    Raised before any network call (e.g. no account, unreadable private key,
-    a feature used without its optional extra installed).
+    Missing credentials and optional extras fail before a network call.
+    Duplicate column names are detected from completed result metadata.
     """
 
 

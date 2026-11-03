@@ -70,10 +70,6 @@ def _stream_data(body: Dict[str, Any]) -> List[Any]:
 
 
 def _stream_row(raw: Any, columns: List[ColumnMeta]) -> Row:
-    if not isinstance(raw, list) or len(raw) != len(columns):
-        raise SnowflakeRequestError(
-            f"result row must be an array with {len(columns)} values"
-        )
     return coerce_row(raw, columns)
 
 

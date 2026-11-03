@@ -92,9 +92,12 @@ rows. A result with zero columns and zero rows writes an empty header line.
 Empty JSONL results produce no output. Both methods return the number of data
 rows written and leave the destination open.
 
-Exports require unique column names. Use distinct SQL aliases when selecting
-columns with the same name; duplicates raise `SnowflakeConfigError` before
-anything is written.
+All query helpers, streams, exports, and `QueryHandle.result()` require unique
+column names, including for empty results. Use distinct SQL aliases when
+selecting columns with the same name or repeated expressions such as
+`SELECT 1, 1`. Duplicates raise `SnowflakeConfigError` naming the repeated names
+before any row is returned or export output is written. Streams and batches
+raise when iteration starts.
 
 | Python value | CSV representation | JSONL representation |
 |--------------|--------------------|----------------------|
@@ -139,9 +142,10 @@ a retained async stream when stopping early.
 ## Failures
 
 Query, polling, partition-fetch, conversion, serialization, and sink errors
-propagate to the caller. Missing or malformed partition data and rows with a
-different width from the metadata raise `SnowflakeRequestError` on the streaming
-path. A valid empty partition remains valid.
+propagate to the caller. Missing or malformed partition data raises
+`SnowflakeRequestError` on the streaming path. On every result path, each row
+must be an array with exactly as many values as the column metadata, otherwise
+`SnowflakeRequestError` is raised. A valid empty partition remains valid.
 
 An export can leave a header or earlier rows in the destination when a later
 operation fails. The helper closes its internal iterator and leaves the sink

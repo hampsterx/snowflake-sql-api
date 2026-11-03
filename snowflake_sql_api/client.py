@@ -48,7 +48,7 @@ from .exports import (
 from .pagination import fetch_all_partitions, iter_result_rows
 from .retry import DEFAULT_RETRY_POLICY, RetryPolicy
 from .transport import StatementResponse, Transport
-from .types import ColumnMeta, Row, coerce_rows
+from .types import ColumnMeta, Row, _validate_column_names, coerce_rows
 
 __all__ = ["SnowflakeClient", "QueryHandle"]
 
@@ -111,7 +111,9 @@ def _rows_affected(body: Dict[str, Any], *, strict: bool = False) -> int:
 
 def _columns_from(body: Dict[str, Any]) -> List[ColumnMeta]:
     metadata = body.get("resultSetMetaData") or {}
-    return [ColumnMeta.from_row_type(rt) for rt in metadata.get("rowType", [])]
+    columns = [ColumnMeta.from_row_type(rt) for rt in metadata.get("rowType", [])]
+    _validate_column_names(columns)
+    return columns
 
 
 class QueryHandle:
