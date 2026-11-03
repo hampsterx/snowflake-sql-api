@@ -135,7 +135,21 @@ GET/poll errors can be correlated through their handle instead.
 See [replayable submissions](submissions.md) for payload invariants, history and
 query-size limits, and the live verification gate.
 
-Tune via `retry_policy=RetryPolicy(...)` on the client constructor.
+Tune via `retry_policy=RetryPolicy(...)` on either client constructor. The
+frozen policy defaults to three total attempts. HTTP 429 uses full jitter with
+5 and 8 second delay ceilings, while other retryable failures use full jitter
+with ceilings of 0.5 and 1 second. `rate_limit_backoff_multiplier=10.0` scales
+the base for 429 before the `max_backoff` cap; `1.0` restores the ordinary schedule.
+
+`Retry-After` delay-seconds or HTTP dates on retryable responses override the
+schedule without jitter, capped by `max_retry_after=60.0` seconds per wait.
+Invalid headers fall back to the schedule, and past dates give zero delay.
+`base_backoff=0` disables scheduled backoff; `max_retry_after=0` disables
+header-directed waits. A default request can wait up to 13 seconds across 429
+retries without a header, or 120 seconds with capped headers, plus HTTP timeouts.
+Status and partition GETs each have their own retry loop; this is not an overall
+query deadline. See [retry configuration](../README.md#retries) for the policy
+methods and date handling.
 
 ## Connection / network
 

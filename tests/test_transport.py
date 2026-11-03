@@ -195,3 +195,138 @@ def test_headers_carry_jwt_and_token_type(private_key_pem: bytes) -> None:
     headers = route.calls[0].request.headers
     assert headers["authorization"].startswith("Bearer ")
     assert headers["x-snowflake-authorization-token-type"] == "KEYPAIR_JWT"
+
+
+@pytest.mark.parametrize(
+    "failures, delays",
+    [
+        ([(429, {})], [5.0]),
+        ([(503, {})], [0.5]),
+        ([(429, {"Retry-After": "12"})], [12.0]),
+        ([(503, {"Retry-After": "999"})], [60.0]),
+        ([(429, {"Retry-After": "invalid"})], [5.0]),
+        ([(429, {"Retry-After": "0"})], [0.0]),
+        ([(429, {"Retry-After": "12"}), (503, {})], [12.0, 1.0]),
+        ([(429, {"Retry-After": "12"}), None], [12.0, 1.0]),
+        ([(429, {}), (429, {})], [5.0, 8.0]),
+    ],
+)
+@pytest.mark.parametrize("operation", ["submit", "get_statement", "cancel"])
+async def test_regression_retry_after_and_status_schedule(
+    async_mode: bool,
+    failures: list,
+    delays: list[float],
+    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from snowflake_sql_api.transport import AsyncTransport
+
+    sleep = AsyncMock() if async_mode else Mock()
+    monkeypatch.setattr(
+        (
+            "snowflake_sql_api.transport.asyncio.sleep"
+            if async_mode
+            else "snowflake_sql_api.transport.time.sleep"
+        ),
+        sleep,
+    )
+    requests = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        index = len(requests) - 1
+        if index >= len(failures):
+            return httpx.Response(200, json=ok_body([], []))
+        failure = failures[index]
+        if failure is None:
+            raise httpx.ConnectError("connection failed", request=request)
+        status, headers = failure
+        return httpx.Response(status, headers=headers, json={"message": "retry"})
+
+    http_client = (httpx.AsyncClient if async_mode else httpx.Client)(
+        transport=httpx.MockTransport(handle)
+    )
+    transport = (AsyncTransport if async_mode else Transport)(
+        HOST,
+        SimpleNamespace(token=lambda: "test-token"),
+        client=http_client,
+        retry_policy=RetryPolicy(jitter=False),
+    )
+    try:
+        if operation == "submit":
+            result = transport.submit({"statement": "select 1"}, request_id="stable-id")
+        else:
+            result = getattr(transport, operation)("handle")
+        if async_mode:
+            result = await result
+        assert result.status_code == 200
+        assert [call.args[0] for call in sleep.call_args_list] == delays
+        if async_mode:
+            assert sleep.await_count == len(delays)
+        assert len(requests) == len(failures) + 1
+        if operation == "submit":
+            assert result.submission_attempts == len(requests)
+            assert all(r.url.params["requestId"] == "stable-id" for r in requests)
+            assert "retry" not in requests[0].url.params
+            assert all(r.url.params["retry"] == "true" for r in requests[1:])
+    finally:
+        if async_mode:
+            await http_client.aclose()
+        else:
+            http_client.close()
+
+
+@pytest.mark.parametrize("status", [200, 400, 429])
+async def test_retry_after_only_sleeps_when_another_attempt_will_run(
+    async_mode: bool, status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from snowflake_sql_api.transport import AsyncTransport
+
+    sleep = AsyncMock() if async_mode else Mock()
+    monkeypatch.setattr(
+        (
+            "snowflake_sql_api.transport.asyncio.sleep"
+            if async_mode
+            else "snowflake_sql_api.transport.time.sleep"
+        ),
+        sleep,
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status, headers={"Retry-After": "10"}, json=ok_body([], [])
+        )
+
+    http_client = (httpx.AsyncClient if async_mode else httpx.Client)(
+        transport=httpx.MockTransport(handle)
+    )
+    transport = (AsyncTransport if async_mode else Transport)(
+        HOST,
+        SimpleNamespace(token=lambda: "test-token"),
+        client=http_client,
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
+    try:
+
+        async def submit():
+            result = transport.submit({"statement": "select 1"}, request_id="r")
+            return await result if async_mode else result
+
+        if status == 200:
+            assert (await submit()).status_code == 200
+        else:
+            expected = SnowflakeRetryError if status == 429 else SnowflakeRequestError
+            with pytest.raises(expected):
+                await submit()
+        sleep.assert_not_called()
+    finally:
+        if async_mode:
+            await http_client.aclose()
+        else:
+            http_client.close()

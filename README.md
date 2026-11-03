@@ -144,6 +144,33 @@ verification requires the opt-in disposable-resource probes. See
 [replayable submissions](docs/submissions.md) for the complete persistence recipe,
 limits and verification status.
 
+## Retries
+
+Both clients accept `retry_policy=RetryPolicy(...)` (import `RetryPolicy` from
+`snowflake_sql_api`). The frozen policy keeps three total attempts by default.
+Without a usable `Retry-After` header, HTTP 429 uses full jitter with delay
+ceilings of 5 and 8 seconds; other retryable failures use full jitter with
+ceilings of 0.5 and 1 second.
+`rate_limit_backoff_multiplier=10.0` scales the normal base for 429 before the
+existing `max_backoff=8.0` cap. Set it to `1.0` for the ordinary schedule, or
+`base_backoff=0` to disable scheduled backoff.
+
+On retryable responses, `Retry-After` delay-seconds or an HTTP date overrides
+that schedule without jitter, capped by `max_retry_after=60.0` seconds per wait.
+Invalid values fall back to the schedule; past dates give zero delay.
+`max_retry_after=0` disables header-directed waits. Tests that must never wait should set both
+`base_backoff=0` and `max_retry_after=0`. Date parsing accepts the
+standard and obsolete HTTP date forms and treats a date without a zone as UTC.
+The policy's `delay_for(attempt, status_code=..., retry_after=...)` applies these
+response rules; `backoff_for(attempt)` keeps its ordinary schedule and signature.
+
+With defaults, a request can wait up to 13 seconds across retries of 429s without
+a header, or up to 120 seconds with capped headers, in addition to HTTP timeouts.
+These are per transport request: status and partition GETs have their own retry
+loops. This policy does not impose an overall query deadline. See
+[troubleshooting retries](docs/troubleshooting.md#transient-failures-and-retries)
+for retry errors and submission recovery.
+
 ## Prior art and alternatives
 
 `snowflake-sql-api` is not the first REST-based Snowflake client. If it does not

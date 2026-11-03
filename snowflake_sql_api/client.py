@@ -192,11 +192,16 @@ class SnowflakeClient:
     ) -> None:
         if private_key is None and private_key_path is None:
             raise SnowflakeConfigError("a private_key or private_key_path is required")
-        key_bytes = (
-            private_key
-            if private_key is not None
-            else Path(private_key_path).read_bytes()  # type: ignore[arg-type]
-        )
+        try:
+            key_bytes = (
+                private_key
+                if private_key is not None
+                else Path(private_key_path).read_bytes()  # type: ignore[arg-type]
+            )
+        except OSError as exc:
+            raise SnowflakeConfigError(
+                f"could not read private key file: {private_key_path}"
+            ) from exc
         self.account = account
         self.user = user
         self.role = role
