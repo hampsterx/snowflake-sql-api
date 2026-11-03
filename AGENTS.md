@@ -135,13 +135,20 @@ the linked regression test first.
 ## Testing
 
 - Unit tests mock the HTTP layer; no network access required for the default suite.
-- This repo's suite uses two mocks. `respx` (a `[dev]` dependency) serves
-  transport-level tests: retries, status mapping, raw requests. The shipped
-  `snowflake_sql_api.testing` helper (`FakeSnowflake` +
-  `make_client`/`make_async_client`, and the auto-registered `fake_snowflake` /
-  `snowflake_client` / `async_snowflake_client` fixtures) serves client-surface
-  tests: exports, streaming, CLI, write helpers. `tests/test_testing.py` covers
-  the helper itself.
+- This repo's suite mocks HTTP three ways, chosen per test file. Match the file
+  you are extending:
+  - `respx` (a `[dev]` dependency): `tests/test_client.py`,
+    `tests/test_aclient.py`, `tests/test_transport.py`, most of
+    `tests/test_regression.py`.
+  - A raw `httpx.MockTransport` handler: `tests/test_batch_writes.py` (through
+    `wire_client` in `tests/streaming_support.py`) and
+    `tests/test_submissions.py`.
+  - The shipped `snowflake_sql_api.testing` helper (`FakeSnowflake` +
+    `make_client`/`make_async_client`, and the auto-registered
+    `fake_snowflake` / `snowflake_client` / `async_snowflake_client`
+    fixtures): `tests/test_cli.py`, and alongside `wire_client` in
+    `tests/test_exports.py` and `tests/test_streaming.py`.
+    `tests/test_testing.py` covers the helper itself.
 - Downstream users need only the shipped helper, not respx. See
   `docs/testing.md`.
 - Each fixed bug gets a named regression test (`test_regression_*`) so it cannot
