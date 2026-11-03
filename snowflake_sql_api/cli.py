@@ -3,7 +3,7 @@
 A thin wrapper over :class:`~snowflake_sql_api.client.SnowflakeClient`, reading
 connection settings from the environment (``SNOWFLAKE_*``). This is the basic
 JSON-output ``query`` command; richer output formats (``--format
-table|csv|json|jsonl``, file input, spinner) arrive with the v0.2.0 toolkit.
+table|csv|json|jsonl``, file input, spinner) are planned for a later release.
 """
 
 from __future__ import annotations
