@@ -99,8 +99,26 @@ async def test_uppercase_names_insert_into_conventional_table(async_mode, table)
     assert control.query_scalar(f"SELECT COUNT(*) FROM {name}") == 6
 
 
+def ignores_quoted_case(control) -> bool:
+    """True when QUOTED_IDENTIFIERS_IGNORE_CASE is on for this user's sessions.
+
+    With it on, Snowflake resolves quoted names as uppercase, so a lowercase
+    spelling reaches the uppercase table and the rejection below cannot hold.
+    """
+    rows = control.query(
+        "SHOW PARAMETERS LIKE 'QUOTED_IDENTIFIERS_IGNORE_CASE' IN SESSION"
+    )
+    for row in rows:
+        fields = {str(key).lower(): val for key, val in row.items()}
+        if str(fields.get("key", "")).upper() == "QUOTED_IDENTIFIERS_IGNORE_CASE":
+            return str(fields.get("value", "")).lower() == "true"
+    return False
+
+
 async def test_lowercase_names_do_not_resolve_to_conventional_table(async_mode, table):
-    name, _ = table
+    name, control = table
+    if ignores_quoted_case(control):
+        pytest.skip("QUOTED_IDENTIFIERS_IGNORE_CASE is TRUE for this account or user")
     cls = AsyncSnowflakeClient if async_mode else SnowflakeClient
     client = cls(**connection())
     try:
