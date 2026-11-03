@@ -111,8 +111,13 @@ def ignores_quoted_case(control) -> bool:
     for row in rows:
         fields = {str(key).lower(): val for key, val in row.items()}
         if str(fields.get("key", "")).upper() == "QUOTED_IDENTIFIERS_IGNORE_CASE":
-            return str(fields.get("value", "")).lower() == "true"
-    return False
+            setting = str(fields.get("value", "")).lower()
+            if setting in ("true", "false"):
+                return setting == "true"
+            pytest.fail(f"unrecognised QUOTED_IDENTIFIERS_IGNORE_CASE row: {row!r}")
+    pytest.fail(
+        f"SHOW PARAMETERS returned no QUOTED_IDENTIFIERS_IGNORE_CASE row: {rows!r}"
+    )
 
 
 async def test_lowercase_names_do_not_resolve_to_conventional_table(async_mode, table):
