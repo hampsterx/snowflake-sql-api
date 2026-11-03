@@ -143,7 +143,8 @@ limits and verification status.
 Both clients accept `retry_policy=RetryPolicy(...)` (import `RetryPolicy` from
 `snowflake_sql_api`). The frozen policy keeps three total attempts by default.
 Without a usable `Retry-After` header, HTTP 429 uses full jitter with delay
-ceilings of 5 and 8 seconds; other retryable failures use 0.5 and 1 second.
+ceilings of 5 and 8 seconds; other retryable failures use full jitter with
+ceilings of 0.5 and 1 second.
 `rate_limit_backoff_multiplier=10.0` scales the normal base for 429 before the
 existing `max_backoff=8.0` cap. Set it to `1.0` for the ordinary schedule, or
 `base_backoff=0` to disable scheduled backoff.
