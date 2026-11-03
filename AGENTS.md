@@ -119,6 +119,11 @@ the linked regression test first.
   are generators (async generators on the async client), so `on_query` fires
   once when consumption starts, including when an export consumes the stream.
   Regression: `test_regression_bug2_stream_notifies_once_and_binds_params`.
+- **Write-helper identifiers are case-exact** (`escaping.quote_identifier`, used
+  by `insert_many` / `insert_batches`). Names are quoted as given and never
+  folded, so a table created unquoted (`events`) must be passed as `"EVENTS"`
+  with columns `["ID"]`. Folding would retarget writes aimed at quoted lowercase
+  objects. Regression: `test_regression_write_helpers_quote_identifiers_case_exact`.
 - **Coverage uses `coverage run`, not `pytest --cov`.** The package ships a pytest
   plugin via the `pytest11` entry point, so `snowflake_sql_api.testing` (and the
   whole package) is imported at plugin-load time, before pytest-cov starts
@@ -129,13 +134,15 @@ the linked regression test first.
 ## Testing
 
 - Unit tests mock the HTTP layer; no network access required for the default suite.
-- This repo's own suite mocks HTTP with `respx`, a `[dev]` dependency. Keep using
-  it for transport-level tests here.
-- `snowflake_sql_api.testing` (`FakeSnowflake` + `make_client`/`make_async_client`,
-  and the auto-registered `fake_snowflake` / `snowflake_client` /
-  `async_snowflake_client` fixtures) is the shipped helper for downstream users,
-  who then need no respx. `tests/test_testing.py` covers the helper itself.
-  See `docs/testing.md`.
+- This repo's suite uses two mocks. `respx` (a `[dev]` dependency) serves
+  transport-level tests: retries, status mapping, raw requests. The shipped
+  `snowflake_sql_api.testing` helper (`FakeSnowflake` +
+  `make_client`/`make_async_client`, and the auto-registered `fake_snowflake` /
+  `snowflake_client` / `async_snowflake_client` fixtures) serves client-surface
+  tests: exports, streaming, CLI, write helpers. `tests/test_testing.py` covers
+  the helper itself.
+- Downstream users need only the shipped helper, not respx. See
+  `docs/testing.md`.
 - Each fixed bug gets a named regression test (`test_regression_*`) so it cannot
   silently return.
 - Target coverage: >= 89%, enforced across Python 3.11-3.15. Run with
