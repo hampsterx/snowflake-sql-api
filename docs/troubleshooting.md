@@ -115,9 +115,13 @@ Who cancels it depends on who owns the statement handle:
   `statement_timeout` would keep running server-side until the account's
   `STATEMENT_TIMEOUT_IN_SECONDS` (two days by default). If the cancel request
   itself fails, you still get the `SnowflakeTimeoutError`, with the cancel failure
-  on its `cancel_error` attribute and in its notes. The cancel can arrive after
-  the statement finished, so a DML statement that timed out may still have
-  committed.
+  on its `cancel_error` attribute and in its notes. `insert_batches` raises
+  `BatchWriteError` instead, with the `SnowflakeTimeoutError` as its `__cause__`
+  (see [batch writes](batch-writes.md)). The cancel can arrive after the
+  statement finished, so a DML statement that timed out may still have
+  committed. The cancel request uses the client's `retry_policy`, so a failing
+  cancel can delay the timeout by the retry backoff plus up to one HTTP
+  `timeout` per attempt.
 - **`QueryHandle.result()`** (and `AsyncQueryHandle.result()`) does not cancel on
   timeout. You hold the handle and may poll it again later; call
   `handle.cancel()` when you want the statement stopped.
