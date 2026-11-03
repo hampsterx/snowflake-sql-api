@@ -61,6 +61,12 @@ for row in rows:
     print(row["ID"], row["NAME"])
 ```
 
+Rows are dictionaries keyed by column name. All query methods and
+`QueryHandle.result()` require unique column names, including for empty results.
+Duplicate names raise `SnowflakeConfigError`; use distinct SQL aliases, such as
+`SELECT 1 AS first_value, 1 AS second_value`. Rows with a different number of
+values from the column metadata raise `SnowflakeRequestError`.
+
 Async:
 
 ```python

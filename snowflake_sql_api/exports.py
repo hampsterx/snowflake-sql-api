@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any, List, TextIO
 
 from .exceptions import SnowflakeConfigError
-from .types import ColumnMeta, Row
+from .types import ColumnMeta, Row, _validate_column_names
 
 
 def validate_batch_size(batch_size: int) -> None:
@@ -22,11 +22,7 @@ def validate_batch_size(batch_size: int) -> None:
 
 
 def validate_export_columns(columns: List[ColumnMeta]) -> None:
-    names = [column.name for column in columns]
-    if len(names) != len(set(names)):
-        raise SnowflakeConfigError(
-            "exports require unique column names; use distinct SQL aliases"
-        )
+    _validate_column_names(columns, context="exports")
 
 
 def _json_default(value: Any) -> str:

@@ -62,6 +62,14 @@ client.close()
 native Python types (numbers to `int`/`Decimal`, dates/timestamps to
 `datetime`/`date`/`time`, VARIANT to `dict`/`list`, and so on).
 
+All query helpers, streams, exports, and `QueryHandle.result()` require unique
+column names, including for empty results. Duplicates raise `SnowflakeConfigError`
+before returning any rows. Use distinct SQL aliases for repeated names or
+expressions: `SELECT o.id AS order_id, c.id AS customer_id` or
+`SELECT 1 AS first_value, 1 AS second_value`. Names retain their exact case, so
+quoted aliases `"ID"` and `"id"` are distinct keys. Rows with a different number
+of values from the column metadata raise `SnowflakeRequestError`.
+
 Use it as a context manager to close the underlying HTTP client automatically:
 
 ```python

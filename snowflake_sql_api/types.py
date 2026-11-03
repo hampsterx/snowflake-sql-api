@@ -20,9 +20,12 @@ authoritative implementation of this wire format.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+
+from .exceptions import SnowflakeConfigError, SnowflakeRequestError
 
 __all__ = ["Row", "ColumnMeta", "coerce_value", "coerce_row", "coerce_rows"]
 
@@ -174,8 +177,26 @@ def coerce_value(raw: Any, column: ColumnMeta) -> Any:
     return raw
 
 
+def _validate_column_names(
+    columns: List[ColumnMeta], *, context: str = "results"
+) -> None:
+    """Require distinct dictionary keys without normalizing Snowflake names."""
+    counts = Counter(column.name for column in columns)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    if duplicates:
+        names = ", ".join(repr(name) for name in duplicates)
+        raise SnowflakeConfigError(
+            f"{context} require unique column names; duplicate names: {names}; "
+            "use distinct SQL aliases"
+        )
+
+
 def coerce_row(raw_row: List[Any], columns: List[ColumnMeta]) -> Row:
-    """Coerce a single row using the result's column metadata."""
+    """Coerce one row using column metadata with validated, unique names."""
+    if not isinstance(raw_row, list) or len(raw_row) != len(columns):
+        raise SnowflakeRequestError(
+            f"result row must be an array with {len(columns)} values"
+        )
     return {
         col.name: coerce_value(cell, col)
         for col, cell in zip(columns, raw_row, strict=False)
@@ -183,5 +204,5 @@ def coerce_row(raw_row: List[Any], columns: List[ColumnMeta]) -> Row:
 
 
 def coerce_rows(raw_rows: List[List[Any]], columns: List[ColumnMeta]) -> List[Row]:
-    """Coerce a partition of raw rows into a list of name-keyed :data:`Row`."""
+    """Coerce a partition using column metadata with validated, unique names."""
     return [coerce_row(row, columns) for row in raw_rows]
