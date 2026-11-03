@@ -35,6 +35,7 @@ from .escaping import quote_identifier, quote_name
 from .exceptions import (
     ResultNotReady,
     SnowflakeConfigError,
+    SnowflakeError,
     SnowflakeRequestError,
     SnowflakeTimeoutError,
 )
@@ -59,6 +60,20 @@ OnQuery = Callable[[str, "Params"], None]
 
 #: Fallback wait, in seconds, when polling a long-running statement to completion.
 DEFAULT_POLL_TIMEOUT = 600.0
+
+
+def _submission_id(request_id: str | uuid.UUID | None, *, retry: bool) -> str:
+    """Allocate or canonicalize an identity before hooks, binding or HTTP."""
+    if request_id is None and not retry:
+        return str(uuid.uuid4())
+    if isinstance(request_id, uuid.UUID):
+        return str(request_id)
+    if not isinstance(request_id, str):
+        raise SnowflakeConfigError("request_id must be a UUID string or UUID object")
+    try:
+        return str(uuid.UUID(request_id))
+    except ValueError as exc:
+        raise SnowflakeConfigError("request_id must be a valid UUID") from exc
 
 
 def _affected_count(value: Any, strict: bool) -> int:
@@ -108,9 +123,16 @@ class QueryHandle:
     (regression bug #3).
     """
 
-    def __init__(self, client: SnowflakeClient, statement_handle: str) -> None:
+    def __init__(
+        self,
+        client: SnowflakeClient,
+        statement_handle: str,
+        *,
+        request_id: Optional[str] = None,
+    ) -> None:
         self._client = client
         self.statement_handle = statement_handle
+        self.request_id = request_id
 
     def result(
         self, *, poll: bool = True, timeout: Optional[float] = None
@@ -483,13 +505,52 @@ class SnowflakeClient:
 
     # -- async submit -----------------------------------------------------
 
-    def submit(self, sql: str, params: Params = None) -> QueryHandle:
-        """Submit a long-running statement and return a :class:`QueryHandle`."""
-        response = self._run(sql, params, async_exec=True)
-        handle = response.statement_handle
-        if handle is None:
-            raise SnowflakeRequestError("async submit returned no statement handle")
-        return QueryHandle(self, handle)
+    def submit(
+        self,
+        sql: str,
+        params: Params = None,
+        *,
+        request_id: str | uuid.UUID | None = None,
+    ) -> QueryHandle:
+        """Submit once with a caller-owned UUID, or generate a fresh UUID4.
+
+        Persist the ID and identical inputs before calling for restart recovery.
+        Use :meth:`resubmit` once a previous attempt might have reached Snowflake.
+        """
+        return self._submit_handle(sql, params, request_id=request_id, retry=False)
+
+    def resubmit(
+        self, sql: str, params: Params = None, *, request_id: str | uuid.UUID
+    ) -> QueryHandle:
+        """Replay identical saved inputs with the same UUID and ``retry=true``.
+
+        The caller owns durable storage, payload consistency and reconciliation
+        when Snowflake's retained history cannot resolve an uncertain outcome.
+        """
+        return self._submit_handle(sql, params, request_id=request_id, retry=True)
+
+    def _submit_handle(
+        self,
+        sql: str,
+        params: Params,
+        *,
+        request_id: str | uuid.UUID | None,
+        retry: bool,
+    ) -> QueryHandle:
+        canonical_id = _submission_id(request_id, retry=retry)
+        self._notify(sql, params)
+        try:
+            payload = self._build_payload(sql, params)
+            response = self._transport.submit(
+                payload, request_id=canonical_id, async_exec=True, retry=retry
+            )
+            handle = response.statement_handle
+            if handle is None:
+                raise SnowflakeRequestError("async submit returned no statement handle")
+            return QueryHandle(self, handle, request_id=canonical_id)
+        except SnowflakeError as exc:
+            exc.request_id = canonical_id
+            raise
 
     # -- lifecycle --------------------------------------------------------
 

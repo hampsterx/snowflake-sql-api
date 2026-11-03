@@ -2,10 +2,10 @@
 
 Defines which conditions are retryable (connect/read timeout, HTTP 429, 5xx,
 status-poll, partition fetch) and the backoff schedule. Retries reuse the
-statement ``requestId`` so a retried DML submit cannot double-apply
-(idempotency); the transport owns that wiring.
-
-Scaffold only: the retry decision and backoff loop land in Phase 2.
+statement ``requestId`` and add ``retry=true`` after the initial attempt.
+Snowflake uses retained statement history to resolve an identical submission;
+this is not an unlimited deduplication or exactly-once guarantee. The transport
+owns this wiring.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class RetryPolicy:
     multiplier: float = 2.0
     jitter: bool = True
     retry_statuses: FrozenSet[int] = field(
-        # 408 (request timeout) is safe to retry: submits reuse their requestId.
+        # Submissions retain their requestId and use retry=true after a timeout.
         default_factory=lambda: frozenset({408, 429, 500, 502, 503, 504})
     )
 

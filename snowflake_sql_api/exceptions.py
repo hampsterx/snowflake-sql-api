@@ -34,6 +34,8 @@ class SnowflakeError(Exception):
     errors outside statement submission (including GET requests).
     """
 
+    request_id: Optional[str] = None
+
     def __init__(
         self, *args: object, submission_attempts: Optional[int] = None
     ) -> None:

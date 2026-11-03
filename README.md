@@ -31,6 +31,7 @@ stays small and cold-starts quickly. Core dependencies: `httpx`, `PyJWT`,
 - Multi-partition result handling for large result sets
 - Lazy row streams and bounded row batches, with CSV and JSONL exports
 - Query helpers, DML, batch insert, async statement submission
+- Caller-owned submission UUIDs and explicit replay across worker restarts
 - A small CLI for ad-hoc queries
 - Optional pandas (`[pandas]`) and typed-row (`[pydantic]`) helpers, kept out of
   the default install
@@ -109,6 +110,33 @@ identity. Reconstruct replayable input and reconcile unknown outcomes before ret
 do not resume with the same advanced iterator. The async equivalent is awaited and
 accepts the same synchronous iterable, whose production can block the event loop.
 See [batch writes](docs/batch-writes.md) for limits and recovery semantics.
+
+## Replayable submissions
+
+For a queued job, allocate a UUID and persist it with the SQL, typed inputs and
+explicit execution context **before** calling `submit()`. Pass that saved ID:
+
+```python
+handle = client.submit(job["sql"], job["params"], request_id=job["request_id"])
+# Persist handle.statement_handle when it reaches the worker.
+
+# After a restart with no saved statement handle, rebuild identical inputs:
+handle = client.resubmit(job["sql"], job["params"], request_id=job["request_id"])
+rows = handle.result()  # Only then mark the durable job complete.
+```
+
+`resubmit()` sends the same ID with `retry=true` on its first HTTP attempt.
+A saved statement handle can instead be attached with `QueryHandle(client, saved_handle)`
+and polled without another submission. Both clients expose `handle.request_id`, and
+submission errors in the `SnowflakeError` family carry the allocated ID. Async
+submission, resubmission and result methods are awaited.
+
+The application owns durable storage, identical payload reconstruction, UUID
+uniqueness and reconciliation. Retained Snowflake history governs recovery; there
+is no unlimited replay window or exactly-once processing guarantee. Live restart
+verification requires the opt-in disposable-resource probes. See
+[replayable submissions](docs/submissions.md) for the complete persistence recipe,
+limits and verification status.
 
 ## Prior art and alternatives
 

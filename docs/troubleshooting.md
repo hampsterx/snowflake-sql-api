@@ -116,9 +116,23 @@ needed; just be aware a single `query` may issue several GETs for a big result.
 ## Transient failures and retries
 
 Connect/read timeouts and HTTP 429/5xx are retried with exponential backoff and
-full jitter. DML submits reuse their `requestId` with `retry=true`, so a retried
-insert/update cannot double-apply. When retries are exhausted you get
-`SnowflakeRetryError` with the last underlying error attached as `__cause__`.
+full jitter. Later HTTP submission attempts reuse the original `requestId` and
+body and add `retry=true`. Snowflake documents that a successfully executed
+statement is not executed again when resubmitted with that same ID and retry
+flag. This depends on identical inputs and retained history, and supplies no
+unlimited replay window or application-wide exactly-once guarantee.
+
+When retries are exhausted you get `SnowflakeRetryError` with the last underlying
+error attached as `__cause__`. This is an uncertain outcome, not proof the SQL
+failed. For worker recovery, persist a caller-owned UUID and all inputs before
+`submit(..., request_id=...)`, then use `resubmit(..., request_id=...)` after an
+uncertain attempt. Use a saved statement handle directly when available. Do not
+repeat ordinary `submit()` with the same ID as a recovery recipe or silently
+allocate a new one. Submission errors and returned handles expose `request_id`;
+GET/poll errors can be correlated through their handle instead.
+
+See [replayable submissions](submissions.md) for payload invariants, history and
+query-size limits, and the live verification gate.
 
 Tune via `retry_policy=RetryPolicy(...)` on the client constructor.
 

@@ -156,8 +156,12 @@ class _TransportBase:
             "User-Agent": self._user_agent,
         }
 
-    def _submit_params(self, request_id: str, async_exec: bool) -> Dict[str, str]:
+    def _submit_params(
+        self, request_id: str, async_exec: bool, retry: bool = False
+    ) -> Dict[str, str]:
         params = {"requestId": request_id}
+        if retry:
+            params["retry"] = "true"
         if async_exec:
             params["async"] = "true"
         return params
@@ -196,13 +200,14 @@ class Transport(_TransportBase):
         *,
         request_id: str,
         async_exec: bool = False,
+        retry: bool = False,
         content: Optional[bytes] = None,
     ) -> StatementResponse:
         """POST a statement, retrying idempotently on transient failure."""
         return self._send(
             "POST",
             STATEMENTS_PATH,
-            params=self._submit_params(request_id, async_exec),
+            params=self._submit_params(request_id, async_exec, retry),
             json=payload if content is None else None,
             content=content,
             is_submit=True,
@@ -308,12 +313,13 @@ class AsyncTransport(_TransportBase):
         *,
         request_id: str,
         async_exec: bool = False,
+        retry: bool = False,
         content: Optional[bytes] = None,
     ) -> StatementResponse:
         return await self._send(
             "POST",
             STATEMENTS_PATH,
-            params=self._submit_params(request_id, async_exec),
+            params=self._submit_params(request_id, async_exec, retry),
             json=payload if content is None else None,
             content=content,
             is_submit=True,
