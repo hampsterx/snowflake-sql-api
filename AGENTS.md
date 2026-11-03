@@ -146,9 +146,11 @@ the linked regression test first.
   - The shipped `snowflake_sql_api.testing` helper (`FakeSnowflake` +
     `make_client`/`make_async_client`, and the auto-registered
     `fake_snowflake` / `snowflake_client` / `async_snowflake_client`
-    fixtures): `tests/test_cli.py`, and alongside `wire_client` in
-    `tests/test_exports.py` and `tests/test_streaming.py`.
-    `tests/test_testing.py` covers the helper itself.
+    fixtures): `tests/test_cli.py`, the write-helper case-exact test in
+    `tests/test_regression.py`, and alongside `wire_client` in
+    `tests/test_exports.py`, `tests/test_streaming.py` and
+    `tests/test_result_validation.py`. `tests/test_testing.py` covers the
+    helper itself.
 - Downstream users need only the shipped helper, not respx. See
   `docs/testing.md`.
 - Each fixed bug gets a named regression test (`test_regression_*`) so it cannot
