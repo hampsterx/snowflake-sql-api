@@ -7,6 +7,7 @@ types below.
 | Exception | Raised when |
 |-----------|-------------|
 | `SnowflakeConfigError` | bad/missing config or an invalid argument, raised locally (for example no key, unreadable key, unbindable parameter value, invalid write columns, rows or limits), or duplicate names in completed result metadata, found after the statement has run |
+| `BatchWriteError` | an `insert_batches()` import stopped after input iteration began; the original error is its `__cause__`, including a `SnowflakeConfigError` for an invalid row (see [batch writes](batch-writes.md#partial-completion-and-failures)) |
 | `SnowflakeAuthError` | Snowflake rejected authentication (HTTP 401); local JWT signing errors propagate with their original types |
 | `SnowflakeForbiddenError` | Snowflake refused an authenticated request (HTTP 403); a `SnowflakeRequestError` subclass |
 | `SnowflakeProgrammingError` | the SQL failed to compile or execute (HTTP 422) |
