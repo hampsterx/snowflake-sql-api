@@ -19,8 +19,13 @@ from uuid import uuid4
 
 import pytest
 
-from snowflake_sql_api import AsyncSnowflakeClient, SnowflakeClient
-from snowflake_sql_api.exceptions import SnowflakeError
+from snowflake_sql_api import AsyncSnowflakeClient, BatchWriteError, SnowflakeClient
+from snowflake_sql_api.exceptions import SnowflakeProgrammingError
+
+# Snowflake's compile error for an unknown table reads "Table '...' does not exist
+# or not authorized". Matching it keeps an auth or network failure from passing as
+# proof that the lowercase spelling was rejected.
+MISSING_OBJECT = "does not exist"
 
 REQUIRED = (
     "SNOWFLAKE_ACCOUNT",
@@ -80,7 +85,10 @@ async def test_uppercase_names_insert_into_conventional_table(async_mode, table)
         many = await value(client.insert_many(name, ["ID", "LABEL"], [(1, "many")]))
         batches = await value(
             client.insert_batches(
-                name, ["ID", "LABEL"], ((i, f"batch {i}") for i in range(2, 7)), max_rows=2
+                name,
+                ["ID", "LABEL"],
+                ((i, f"batch {i}") for i in range(2, 7)),
+                max_rows=2,
             )
         )
     finally:
@@ -96,11 +104,15 @@ async def test_lowercase_names_do_not_resolve_to_conventional_table(async_mode, 
     cls = AsyncSnowflakeClient if async_mode else SnowflakeClient
     client = cls(**connection())
     try:
-        with pytest.raises(SnowflakeError):
+        with pytest.raises(SnowflakeProgrammingError, match=MISSING_OBJECT):
             await value(client.insert_many(name.lower(), ["id", "label"], [(1, "x")]))
-        with pytest.raises(SnowflakeError):
+        with pytest.raises(BatchWriteError) as caught:
             await value(
                 client.insert_batches(name.lower(), ["id", "label"], [(1, "x")])
             )
     finally:
         await value(client.aclose() if async_mode else client.close())
+    cause = caught.value.__cause__
+    assert isinstance(cause, SnowflakeProgrammingError), repr(cause)
+    assert MISSING_OBJECT in str(cause)
+    assert caught.value.outcome == "failed"
