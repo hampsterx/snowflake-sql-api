@@ -4,8 +4,9 @@ Owns the actual ``httpx`` calls (sync and async), status-code interpretation
 (200 success, 202 long-running/async, 422 execution failure, 401 auth,
 403 forbidden, 429/5xx retryable), the retry loop, and ``requestId`` reuse for
 idempotent retries. A retried submit re-POSTs the identical body with the same
-``requestId`` and ``retry=true`` so Snowflake deduplicates instead of
-double-applying DML.
+``requestId`` and ``retry=true``. Snowflake resolves identical submissions
+through retained statement history, with no unlimited replay window or
+application-wide exactly-once guarantee.
 
 Higher layers (``client``/``aclient``) talk to the transport, not to ``httpx``.
 """
@@ -156,8 +157,12 @@ class _TransportBase:
             "User-Agent": self._user_agent,
         }
 
-    def _submit_params(self, request_id: str, async_exec: bool) -> Dict[str, str]:
+    def _submit_params(
+        self, request_id: str, async_exec: bool, retry: bool = False
+    ) -> Dict[str, str]:
         params = {"requestId": request_id}
+        if retry:
+            params["retry"] = "true"
         if async_exec:
             params["async"] = "true"
         return params
@@ -196,13 +201,14 @@ class Transport(_TransportBase):
         *,
         request_id: str,
         async_exec: bool = False,
+        retry: bool = False,
         content: Optional[bytes] = None,
     ) -> StatementResponse:
         """POST a statement, retrying idempotently on transient failure."""
         return self._send(
             "POST",
             STATEMENTS_PATH,
-            params=self._submit_params(request_id, async_exec),
+            params=self._submit_params(request_id, async_exec, retry),
             json=payload if content is None else None,
             content=content,
             is_submit=True,
@@ -308,12 +314,13 @@ class AsyncTransport(_TransportBase):
         *,
         request_id: str,
         async_exec: bool = False,
+        retry: bool = False,
         content: Optional[bytes] = None,
     ) -> StatementResponse:
         return await self._send(
             "POST",
             STATEMENTS_PATH,
-            params=self._submit_params(request_id, async_exec),
+            params=self._submit_params(request_id, async_exec, retry),
             json=payload if content is None else None,
             content=content,
             is_submit=True,

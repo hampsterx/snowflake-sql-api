@@ -30,11 +30,12 @@ import httpx
 from .auth import KeypairAuthenticator, account_hostname
 from .batches import BatchWriteResult, _BatchExecution, _BatchPlanner
 from .bindings import to_bindings
-from .client import DEFAULT_POLL_TIMEOUT, _columns_from, _rows_affected
+from .client import DEFAULT_POLL_TIMEOUT, _columns_from, _rows_affected, _submission_id
 from .escaping import quote_identifier, quote_name
 from .exceptions import (
     ResultNotReady,
     SnowflakeConfigError,
+    SnowflakeError,
     SnowflakeRequestError,
     SnowflakeTimeoutError,
 )
@@ -61,9 +62,16 @@ OnQuery = Callable[[str, "Params"], None]
 class AsyncQueryHandle:
     """Async handle to a submitted statement (see :class:`~snowflake_sql_api.client.QueryHandle`)."""
 
-    def __init__(self, client: AsyncSnowflakeClient, statement_handle: str) -> None:
+    def __init__(
+        self,
+        client: AsyncSnowflakeClient,
+        statement_handle: str,
+        *,
+        request_id: Optional[str] = None,
+    ) -> None:
         self._client = client
         self.statement_handle = statement_handle
+        self.request_id = request_id
 
     async def result(
         self, *, poll: bool = True, timeout: Optional[float] = None
@@ -436,13 +444,54 @@ class AsyncSnowflakeClient:
             del batch
         return planner.result()
 
-    async def submit(self, sql: str, params: Params = None) -> AsyncQueryHandle:
-        """Submit a long-running statement and return an :class:`AsyncQueryHandle`."""
-        response = await self._run(sql, params, async_exec=True)
-        handle = response.statement_handle
-        if handle is None:
-            raise SnowflakeRequestError("async submit returned no statement handle")
-        return AsyncQueryHandle(self, handle)
+    async def submit(
+        self,
+        sql: str,
+        params: Params = None,
+        *,
+        request_id: str | uuid.UUID | None = None,
+    ) -> AsyncQueryHandle:
+        """Submit once with a caller-owned UUID, or generate a fresh UUID4.
+
+        Persist the ID and identical inputs before calling for restart recovery.
+        Use :meth:`resubmit` once a previous attempt might have reached Snowflake.
+        """
+        return await self._submit_handle(
+            sql, params, request_id=request_id, retry=False
+        )
+
+    async def resubmit(
+        self, sql: str, params: Params = None, *, request_id: str | uuid.UUID
+    ) -> AsyncQueryHandle:
+        """Replay identical saved inputs with the same UUID and ``retry=true``.
+
+        The caller owns durable storage, payload consistency and reconciliation
+        when Snowflake's retained history cannot resolve an uncertain outcome.
+        """
+        return await self._submit_handle(sql, params, request_id=request_id, retry=True)
+
+    async def _submit_handle(
+        self,
+        sql: str,
+        params: Params,
+        *,
+        request_id: str | uuid.UUID | None,
+        retry: bool,
+    ) -> AsyncQueryHandle:
+        canonical_id = _submission_id(request_id, retry=retry)
+        self._notify(sql, params)
+        try:
+            payload = self._build_payload(sql, params)
+            response = await self._transport.submit(
+                payload, request_id=canonical_id, async_exec=True, retry=retry
+            )
+            handle = response.statement_handle
+            if handle is None:
+                raise SnowflakeRequestError("async submit returned no statement handle")
+            return AsyncQueryHandle(self, handle, request_id=canonical_id)
+        except SnowflakeError as exc:
+            exc.request_id = canonical_id
+            raise
 
     # -- lifecycle --------------------------------------------------------
 

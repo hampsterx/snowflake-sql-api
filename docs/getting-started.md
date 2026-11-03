@@ -81,7 +81,8 @@ with SnowflakeClient(account="myorg-myaccount", user="MY_USER",
 | `execute(sql, params)` | rows affected (DML/DDL) |
 | `insert_many(table, columns, rows)` | rows inserted by one bound multi-row statement |
 | `insert_batches(table, columns, rows, max_rows=1000, max_bytes=1_000_000)` | confirmed progress across bounded INSERT statements |
-| `submit(sql, params)` | a `QueryHandle` for a long-running statement |
+| `submit(sql, params, *, request_id=None)` | a `QueryHandle` with its generated or caller-owned UUID |
+| `resubmit(sql, params, *, request_id)` | a handle for [replaying identical persisted inputs](submissions.md) |
 | `query_stream(sql, params)` | a lazy generator of converted rows |
 | `query_batches(sql, params, batch_size=1000)` | lazy batches of at most the requested row count |
 | `export_csv(sql, output, params)` | data-row count written to a caller-owned text sink, with a CSV header |
