@@ -157,6 +157,15 @@ class _TransportBase:
             "User-Agent": self._user_agent,
         }
 
+    def _retry_delay(self, attempt: int, response: Optional[httpx.Response]) -> float:
+        return self._retry.delay_for(
+            attempt,
+            status_code=response.status_code if response is not None else None,
+            retry_after=(
+                response.headers.get("Retry-After") if response is not None else None
+            ),
+        )
+
     def _submit_params(
         self, request_id: str, async_exec: bool, retry: bool = False
     ) -> Dict[str, str]:
@@ -242,11 +251,13 @@ class Transport(_TransportBase):
         known_handle: Optional[str] = None
         try:
             last_exc: Optional[Exception] = None
+            retry_response: Optional[httpx.Response] = None
             for attempt in range(self._retry.max_attempts):
                 if attempt > 0:
                     if is_submit and params is not None:
                         params = {**params, "retry": "true"}
-                    time.sleep(self._retry.backoff_for(attempt - 1))
+                    time.sleep(self._retry_delay(attempt - 1, retry_response))
+                retry_response = None
                 try:
                     headers = self._headers()
                     attempts += 1
@@ -262,6 +273,7 @@ class Transport(_TransportBase):
                     last_exc = exc
                     continue
                 if self._retry.should_retry_status(response.status_code):
+                    retry_response = response
                     last_exc = _retry_error(response)
                     if is_submit and last_exc.statement_handle:
                         known_handle = last_exc.statement_handle
@@ -353,11 +365,13 @@ class AsyncTransport(_TransportBase):
         known_handle: Optional[str] = None
         try:
             last_exc: Optional[Exception] = None
+            retry_response: Optional[httpx.Response] = None
             for attempt in range(self._retry.max_attempts):
                 if attempt > 0:
                     if is_submit and params is not None:
                         params = {**params, "retry": "true"}
-                    await asyncio.sleep(self._retry.backoff_for(attempt - 1))
+                    await asyncio.sleep(self._retry_delay(attempt - 1, retry_response))
+                retry_response = None
                 try:
                     headers = self._headers()
                     attempts += 1
@@ -373,6 +387,7 @@ class AsyncTransport(_TransportBase):
                     last_exc = exc
                     continue
                 if self._retry.should_retry_status(response.status_code):
+                    retry_response = response
                     last_exc = _retry_error(response)
                     if is_submit and last_exc.statement_handle:
                         known_handle = last_exc.statement_handle

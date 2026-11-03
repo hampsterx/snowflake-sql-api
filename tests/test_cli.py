@@ -141,3 +141,17 @@ def test_json_default_serializes(value: object, expected: str) -> None:
 def test_json_default_rejects_unsupported() -> None:
     with pytest.raises(TypeError, match="cannot serialize"):
         cli._json_default(object())
+
+
+def test_regression_missing_key_path_reports_error_without_traceback(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test-account")
+    monkeypatch.setenv("SNOWFLAKE_USER", "test-user")
+    monkeypatch.setenv("SNOWFLAKE_PRIVATE_KEY_PATH", str(tmp_path / "missing.p8"))
+    monkeypatch.delenv("SNOWFLAKE_PRIVATE_KEY", raising=False)
+    assert cli.main(["query", "select 1"]) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "error: could not read private key file" in output.err
+    assert "Traceback" not in output.err

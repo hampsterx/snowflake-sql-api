@@ -251,3 +251,34 @@ def test_host_override_changes_url(private_key_pem: bytes) -> None:
     client.query("SELECT 1")
     client.close()
     assert route.called
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("missing"),
+        PermissionError("denied"),
+        IsADirectoryError("directory"),
+    ],
+)
+def test_regression_unreadable_key_path_is_config_error(
+    monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    from pathlib import Path
+
+    def unreadable(path: Path) -> bytes:
+        raise error
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(
+        SnowflakeConfigError, match="could not read private key file"
+    ) as caught:
+        SnowflakeClient(ACCOUNT, USER, private_key_path="/unreadable/key.p8")
+    assert caught.value.__cause__ is error
+    assert "/unreadable/key.p8" in str(caught.value)
+
+
+def test_regression_missing_key_path_is_config_error(tmp_path) -> None:
+    with pytest.raises(SnowflakeConfigError) as caught:
+        SnowflakeClient(ACCOUNT, USER, private_key_path=tmp_path / "missing.p8")
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
