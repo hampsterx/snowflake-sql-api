@@ -180,6 +180,7 @@ async def test_regression_poll_timeout_cancels_owned_statement(
     assert _cancels(fake.requests) == ["/api/v2/statements/stmt-1/cancel"]
     assert info.value.cancel_error is None
     assert info.value.__cause__ is None
+    assert info.value.__notes__ == ["cancellation requested for stmt-1"]
 
 
 async def test_regression_poll_timeout_cancel_failure_keeps_timeout(
@@ -203,7 +204,9 @@ async def test_regression_poll_timeout_cancel_failure_keeps_timeout(
     assert "did not finish" in str(err)
     assert isinstance(err.cancel_error, SnowflakeRetryError)
     assert err.__cause__ is None
-    assert any("slow-h" in note for note in err.__notes__)
+    # The note must say the cancel failed, never that it was requested.
+    assert len(err.__notes__) == 1
+    assert err.__notes__[0].startswith("cancelling slow-h after the timeout failed:")
     # The default policy retries the 500 before giving up on the cancel.
     assert set(_cancels(requests)) == {"/api/v2/statements/slow-h/cancel"}
 
