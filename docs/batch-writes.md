@@ -48,6 +48,10 @@ lowercase names only for objects created with quoted lowercase identifiers. A
 qualified name such as `MY_DB.MY_SCHEMA.EVENTS` is split on `.` and each part is
 quoted the same way.
 
+This describes Snowflake's default, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`. When
+an account, user or session sets that parameter to `TRUE`, Snowflake resolves
+quoted identifiers as uppercase too, so lowercase names also reach `EVENTS`.
+
 ## Limits and consumption
 
 `max_rows` defaults to 1000 and must be a positive integer no larger than 200,000,

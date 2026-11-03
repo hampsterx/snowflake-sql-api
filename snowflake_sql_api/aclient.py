@@ -418,7 +418,9 @@ class AsyncSnowflakeClient:
         case-sensitive: a table created as ``CREATE TABLE events (id INT)`` is
         stored as ``EVENTS`` / ``ID`` and must be addressed as ``"EVENTS"`` and
         ``["ID"]``. Lowercase names only match objects created with quoted
-        lowercase identifiers.
+        lowercase identifiers. This assumes Snowflake's default
+        ``QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE``; with it ``TRUE``, quoted
+        names resolve as uppercase.
         """
         if not columns:
             raise SnowflakeConfigError("insert_many requires at least one column")
@@ -459,7 +461,9 @@ class AsyncSnowflakeClient:
         case-sensitive: a table created as ``CREATE TABLE events (id INT)`` is
         stored as ``EVENTS`` / ``ID`` and must be addressed as ``"EVENTS"`` and
         ``["ID"]``. Lowercase names only match objects created with quoted
-        lowercase identifiers.
+        lowercase identifiers. This assumes Snowflake's default
+        ``QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE``; with it ``TRUE``, quoted
+        names resolve as uppercase.
         """
         planner = _BatchPlanner(
             table, columns, rows, max_rows, max_bytes, self._build_payload

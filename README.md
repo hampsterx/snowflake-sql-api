@@ -106,7 +106,8 @@ with SnowflakeClient.from_env() as client:
 
 Table and column names are quoted exactly as given, so they are case-sensitive:
 a table created as `CREATE TABLE events (id INT, label TEXT)` is stored as
-`EVENTS` with columns `ID` and `LABEL`, and must be addressed in uppercase.
+`EVENTS` with columns `ID` and `LABEL`, and must be addressed in uppercase. This
+assumes Snowflake's default `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`.
 
 `insert_many()` sends one statement; `insert_batches()` sends sequential statements
 and can partially complete. Its byte budget covers the exact JSON body. On failure,
