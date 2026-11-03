@@ -121,9 +121,10 @@ the linked regression test first.
   Regression: `test_regression_bug2_stream_notifies_once_and_binds_params`.
 - **Write-helper identifiers are case-exact** (`escaping.quote_identifier`, used
   by `insert_many` / `insert_batches`). Names are quoted as given and never
-  folded, so a table created unquoted (`events`) must be passed as `"EVENTS"`
-  with columns `["ID"]`. Folding would retarget writes aimed at quoted lowercase
-  objects. Regression: `test_regression_write_helpers_quote_identifiers_case_exact`.
+  folded, so under Snowflake's default `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`
+  a table created unquoted (`events`) must be passed as `"EVENTS"` with columns
+  `["ID"]`. Folding would retarget writes aimed at quoted lowercase objects.
+  Regression: `test_regression_write_helpers_quote_identifiers_case_exact`.
 - **Coverage uses `coverage run`, not `pytest --cov`.** The package ships a pytest
   plugin via the `pytest11` entry point, so `snowflake_sql_api.testing` (and the
   whole package) is imported at plugin-load time, before pytest-cov starts
