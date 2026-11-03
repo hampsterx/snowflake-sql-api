@@ -224,3 +224,42 @@ async def test_regression_handle_result_timeout_does_not_cancel(
             await pending if async_mode else pending
     assert _cancels(fake.requests) == []
     assert info.value.cancel_error is None
+
+
+@pytest.mark.parametrize("helper", ["insert_many", "insert_batches"])
+async def test_regression_write_helpers_quote_identifiers_case_exact(
+    async_mode: bool, helper: str
+) -> None:
+    """Write helpers quote table and column names exactly as given.
+
+    Snowflake stores an unquoted identifier in uppercase, so the documented
+    examples use uppercase names. A lowercase name must stay lowercase (quoted,
+    never folded): folding would silently change which object a quoted,
+    lowercase-created table resolves to.
+    """
+    import json
+
+    from snowflake_sql_api.testing import (
+        FakeSnowflake,
+        make_async_client,
+        make_client,
+    )
+
+    upper = 'INSERT INTO "EVENTS" ("ID", "LABEL") VALUES (?, ?)'
+    lower = 'INSERT INTO "events" ("id", "label") VALUES (?, ?)'
+    fake = FakeSnowflake().register_dml(upper, 1).register_dml(lower, 1)
+    rows = [(1, "a")]
+    if async_mode:
+        async with make_async_client(fake) as aclient:
+            await getattr(aclient, helper)("EVENTS", ["ID", "LABEL"], rows)
+            await getattr(aclient, helper)("events", ["id", "label"], rows)
+    else:
+        with make_client(fake) as client:
+            getattr(client, helper)("EVENTS", ["ID", "LABEL"], rows)
+            getattr(client, helper)("events", ["id", "label"], rows)
+    sent = [
+        json.loads(request.content)["statement"]
+        for request in fake.requests
+        if request.method == "POST"
+    ]
+    assert sent == [upper, lower]

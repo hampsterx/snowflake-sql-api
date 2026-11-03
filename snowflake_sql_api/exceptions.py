@@ -83,8 +83,9 @@ class BatchWriteError(SnowflakeError):
 class SnowflakeConfigError(SnowflakeError):
     """Invalid client configuration or an unsupported result shape.
 
-    Missing credentials and optional extras fail before a network call.
-    Duplicate column names are detected from completed result metadata.
+    Missing credentials and invalid write-helper columns or limits fail before a
+    network call. Duplicate column names are detected from completed result
+    metadata.
     """
 
 
