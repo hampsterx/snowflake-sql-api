@@ -142,8 +142,8 @@ that the whole import is resumable. This method does not replay a completed pref
 or create a new identity to retry an uncertain batch.
 
 When polling a running batch statement exceeds `statement_timeout` (or the
-default wait), the client makes one best-effort request to cancel that statement
-and then raises `BatchWriteError` with the `SnowflakeTimeoutError` as its cause.
+default wait), the client makes a best-effort request to cancel that statement
+(retried under the client's `retry_policy`) and then raises `BatchWriteError` with the `SnowflakeTimeoutError` as its cause.
 The outcome stays `unknown`: the statement can commit before the cancel reaches
 Snowflake, so reconcile it like any other unknown batch. A failed cancel request
 is kept on the timeout's `cancel_error` and does not change the outcome.
