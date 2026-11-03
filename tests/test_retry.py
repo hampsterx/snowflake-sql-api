@@ -172,3 +172,4 @@ def test_legacy_backoff_hook_keeps_its_signature() -> None:
 
     assert CustomPolicy().delay_for(0, status_code=503) == 3.0
     assert CustomPolicy().delay_for(0) == 3.0
+    assert CustomPolicy(jitter=False).delay_for(0, status_code=429) == 5.0
