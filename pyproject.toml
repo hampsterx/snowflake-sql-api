@@ -77,6 +77,7 @@ packages = ["snowflake_sql_api"]
 include = [
     "/snowflake_sql_api",
     "/tests",
+    "/scripts/live_smoke.py",
     "/README.md",
     "/LICENSE",
     "/CONTRIBUTING.md",
