@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 import uuid
 from contextlib import closing
+from time import monotonic
 from typing import (
     Any,
     Dict,
@@ -250,14 +251,19 @@ class SnowflakeClient(_ClientBase):
         its own behalf: nobody else holds the handle, so a timeout would leave
         it running server-side with no owner. A caller-held handle is not
         cancelled, since its owner may poll it again.
+
+        A ``KeyboardInterrupt`` (or any other non-``Exception`` raised while
+        polling) propagates without a cancel: an HTTP call made while the
+        process is being interrupted can hang, so the statement keeps running
+        until its server-side ``timeout``.
         """
         wait = DEFAULT_POLL_TIMEOUT if timeout is None else timeout
-        deadline = time.time() + wait
+        deadline = monotonic() + wait
         while True:
             response = self._transport.get_statement(handle)
             if not response.is_running:
                 return response
-            if time.time() >= deadline:
+            if monotonic() >= deadline:
                 error = SnowflakeTimeoutError(
                     f"statement {handle} did not finish within {wait}s"
                 )

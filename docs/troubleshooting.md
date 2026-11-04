@@ -115,25 +115,53 @@ Who cancels it depends on who owns the statement handle:
   `insert_batches`, `query_stream`, `query_batches`, `export_csv`,
   `export_jsonl`) started the statement themselves, so nobody else can stop it.
   When the wait runs out they make a best-effort cancel request for that
-  statement (retried under the client's `retry_policy`), then raise the timeout. Without it, a statement submitted with no
+  statement, then raise the timeout. Without it, a statement submitted with no
   `statement_timeout` would keep running server-side until the account's
   `STATEMENT_TIMEOUT_IN_SECONDS` (two days by default). If the cancel request
-  itself fails, you still get the `SnowflakeTimeoutError`, with the cancel failure
-  on its `cancel_error` attribute and in its notes. `insert_batches` raises
-  `BatchWriteError` instead, with the `SnowflakeTimeoutError` as its `__cause__`
-  (see [batch writes](batch-writes.md)). The cancel can arrive after the
-  statement finished, so a DML statement that timed out may still have
-  committed. The cancel request uses the client's `retry_policy`, so a failing
-  cancel can delay the timeout by the retry backoff plus up to one HTTP
-  `timeout` per attempt. A statement that legitimately runs longer than the
-  wait is cancelled too, so set a larger `statement_timeout` for it, or use
-  `submit()` and own the handle.
+  itself fails, you still get the `SnowflakeTimeoutError`, with the cancel
+  failure on its `cancel_error` attribute and in its notes. `insert_batches`
+  raises `BatchWriteError` instead, with the `SnowflakeTimeoutError` as its
+  `__cause__` (see [batch writes](batch-writes.md)). The cancel can arrive
+  after the statement finished, so a DML statement that timed out may still
+  have committed. The cancel request is retried under the client's
+  `retry_policy`, so a failing cancel can delay the timeout by the retry
+  backoff plus up to one HTTP `timeout` per attempt. A statement that
+  legitimately runs longer than the wait is cancelled too, so set a larger
+  `statement_timeout` for it, or use `submit()` and own the handle.
 - **`QueryHandle.result()`** (and `AsyncQueryHandle.result()`) does not cancel on
   timeout. You hold the handle and may poll it again later; call
   `handle.cancel()` when you want the statement stopped.
 
-Setting a positive `statement_timeout` also sends Snowflake a server-side
-`timeout`, so the statement stops on its own even if the client process dies before it can cancel.
+The wait is measured on a monotonic clock, so a system clock correction does
+not shorten or stretch it.
+
+`statement_timeout` must be a positive integer number of seconds, or `None`
+(the default) for no client setting. Any other value, including `0`, a
+negative number or a `bool`, raises `SnowflakeConfigError` when the client is
+constructed. Earlier releases accepted `0`, which the client read as a
+zero-second wait (cancelling any statement still running at the first poll)
+while Snowflake reads a `timeout` of `0` as its maximum, 604800 seconds. Leave
+it unset to get Snowflake's `STATEMENT_TIMEOUT_IN_SECONDS` server-side and the
+600-second default wait client-side.
+
+Setting `statement_timeout` also sends Snowflake a server-side `timeout`, so
+the statement stops on its own even if the client process dies before it can
+cancel.
+
+### Interrupting a poll
+
+- **Async task cancellation.** When the task awaiting a call that polls for you
+  is cancelled (`task.cancel()`, an enclosing `asyncio.timeout`, a `TaskGroup`
+  failing), the client sends a best-effort cancel for the statement it started,
+  then re-raises the `CancelledError` unchanged. The cancel request runs in its
+  own task, is not abandoned if the task is cancelled again, and is given at
+  most 5 seconds; a failed cancel is not reported. A task cancelled while
+  awaiting `AsyncQueryHandle.result()` leaves the statement running, as a
+  timeout there does.
+- **Sync `KeyboardInterrupt`.** The sync client does not cancel the statement
+  on Ctrl-C: an HTTP call made while the process is being interrupted can hang.
+  The statement keeps running until its server-side `timeout` or the account's
+  `STATEMENT_TIMEOUT_IN_SECONDS`. Set `statement_timeout` if that matters.
 
 ## Large result sets (partitions)
 

@@ -80,10 +80,26 @@ python -m build
 
 ### Live tests
 
-Tests under `tests/smoke/` hit a real Snowflake account and need keypair
-credentials via environment variables (`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`,
-`SNOWFLAKE_PRIVATE_KEY_PATH`). They are skipped when those are unset. Never commit
-private keys, `.gitignore` excludes `*.pem` / `*.p8` / `*private_key*`.
+Tests under `tests/smoke/` hit a real Snowflake account. Each file skips
+unless its variables are set:
+
+- `tests/smoke/test_smoke.py` (read-only, synthetic `SELECT`/`GENERATOR`
+  queries) needs keypair credentials: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`,
+  `SNOWFLAKE_PRIVATE_KEY_PATH`. It builds the client with `from_env()`, so the
+  optional `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`, `SNOWFLAKE_ROLE`,
+  `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` and
+  `SNOWFLAKE_HOST` apply too. Set `SNOWFLAKE_WAREHOUSE` unless the user has a
+  default warehouse: the `GENERATOR` partition probes need one.
+- `tests/smoke/test_submissions.py` and `tests/smoke/test_identifier_case.py`
+  write. They also need `SNOWFLAKE_LIVE_DML=1` and an explicit
+  `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` and `SNOWFLAKE_WAREHOUSE` naming a
+  disposable test namespace, and read the same optional passphrase, role and
+  host variables. They create and drop their own uniquely named tables, and
+  `test_submissions.py` a stored procedure too, so the role needs `CREATE TABLE`
+  and `CREATE PROCEDURE` on that schema. Both spend warehouse time.
+
+Never commit private keys, `.gitignore` excludes `*.pem` / `*.p8` /
+`*private_key*`.
 
 ## Design Principles
 

@@ -18,6 +18,23 @@ Params = Optional[Sequence[Any]]
 OnQuery = Callable[[str, "Params"], None]
 
 
+def _validate_statement_timeout(value: Optional[int]) -> Optional[int]:
+    """Accept ``None`` or a positive integer number of seconds.
+
+    The value is both the client's polling deadline and the server-side
+    ``timeout``. Snowflake reads ``timeout: 0`` as its maximum (604800 seconds)
+    while the client would read it as no wait at all, so zero and negative
+    values are rejected rather than given two meanings.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise SnowflakeConfigError(
+            f"statement_timeout must be a positive integer of seconds, got {value!r}"
+        )
+    return value
+
+
 class _ClientBase:
     """Shared non-I/O state and helpers; concrete clients own their transports."""
 
@@ -60,7 +77,7 @@ class _ClientBase:
         self.schema = schema
         self.timezone = timezone
         self._parameters = dict(parameters) if parameters else {}
-        self._statement_timeout = statement_timeout
+        self._statement_timeout = _validate_statement_timeout(statement_timeout)
         self._poll_interval = poll_interval
         self.on_query = on_query
 

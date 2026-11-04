@@ -164,8 +164,10 @@ The outcome stays `unknown`: the statement can commit before the cancel reaches
 Snowflake, so reconcile it like any other unknown batch. A failed cancel request
 is kept on the timeout's `cancel_error` and does not change the outcome.
 
-Task cancellation and keyboard interruption propagate unchanged and do not cancel
-the server statement. They can leave the current submission uncertain, without a
-`BatchWriteError` checkpoint.
+Task cancellation and keyboard interruption propagate unchanged, without a
+`BatchWriteError` checkpoint, and can leave the current submission uncertain.
+Cancelling the task while the async client polls a running batch statement also
+sends a best-effort cancel for it; a sync `KeyboardInterrupt` does not (see
+[interrupting a poll](troubleshooting.md#interrupting-a-poll)).
 Durable checkpoints, cancellation recovery, parallel writes, whole-import
 transactions, staging files, `COPY INTO` and upserts are outside this API.

@@ -8,8 +8,9 @@ design principle: a feature on one side should exist on the other.
 from __future__ import annotations
 
 import asyncio
-import time
+import contextlib
 import uuid
+from time import monotonic
 from typing import (
     Any,
     AsyncGenerator,
@@ -51,6 +52,37 @@ from .transport import AsyncTransport, StatementResponse
 from .types import ColumnMeta, Row, coerce_rows
 
 __all__ = ["AsyncSnowflakeClient", "AsyncQueryHandle"]
+
+#: Seconds a best-effort cancel may take after the polling task is cancelled.
+CANCEL_ON_TASK_CANCEL_TIMEOUT = 5.0
+
+# Strong references to cancel requests still in flight after their waiter was
+# cancelled again, so the event loop does not drop them half-sent.
+_pending_cancels: set[asyncio.Task[Any]] = set()
+
+
+def _forget_cancel(task: asyncio.Task[Any]) -> None:
+    _pending_cancels.discard(task)
+    if not task.cancelled():
+        task.exception()  # retrieved: a failed best-effort cancel is not reported
+
+
+async def _cancel_after_task_cancel(transport: AsyncTransport, handle: str) -> None:
+    """Best-effort cancel of ``handle`` while a ``CancelledError`` propagates.
+
+    The request runs in its own task, bounded by
+    :data:`CANCEL_ON_TASK_CANCEL_TIMEOUT`, and ``asyncio.wait`` does not cancel
+    it if the waiting task is cancelled again. Every failure is swallowed: the
+    caller re-raises the original ``CancelledError``.
+    """
+    task = asyncio.ensure_future(
+        asyncio.wait_for(transport.cancel(handle), CANCEL_ON_TASK_CANCEL_TIMEOUT)
+    )
+    _pending_cancels.add(task)
+    task.add_done_callback(_forget_cancel)
+    # Cancelled again: the bounded request finishes on its own.
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait({task})
 
 
 class AsyncQueryHandle:
@@ -165,26 +197,38 @@ class AsyncSnowflakeClient(_ClientBase):
     async def _poll(
         self, handle: str, timeout: Optional[float], *, cancel_on_timeout: bool
     ) -> StatementResponse:
-        """Poll ``handle``; see :meth:`SnowflakeClient._poll` for cancellation."""
+        """Poll ``handle``; see :meth:`SnowflakeClient._poll` for cancellation.
+
+        Unlike the sync client's ``KeyboardInterrupt``, a task cancellation
+        while a client-owned poll waits also cancels the statement: a bounded,
+        best-effort request (see :func:`_cancel_after_task_cancel`), after which
+        the ``CancelledError`` is re-raised unchanged.
+        """
         wait = DEFAULT_POLL_TIMEOUT if timeout is None else timeout
-        deadline = time.time() + wait
+        deadline = monotonic() + wait
         while True:
-            response = await self._transport.get_statement(handle)
-            if not response.is_running:
-                return response
-            if time.time() >= deadline:
-                error = SnowflakeTimeoutError(
-                    f"statement {handle} did not finish within {wait}s"
-                )
+            try:
+                response = await self._transport.get_statement(handle)
+                if not response.is_running:
+                    return response
+                if monotonic() < deadline:
+                    await asyncio.sleep(self._poll_interval)
+                    continue
+            except asyncio.CancelledError:
                 if cancel_on_timeout:
-                    try:
-                        await self._transport.cancel(handle)
-                    except Exception as exc:
-                        _record_cancel_failure(error, handle, exc)
-                    else:
-                        error.add_note(f"cancellation requested for {handle}")
-                raise error
-            await asyncio.sleep(self._poll_interval)
+                    await _cancel_after_task_cancel(self._transport, handle)
+                raise
+            error = SnowflakeTimeoutError(
+                f"statement {handle} did not finish within {wait}s"
+            )
+            if cancel_on_timeout:
+                try:
+                    await self._transport.cancel(handle)
+                except Exception as exc:
+                    _record_cancel_failure(error, handle, exc)
+                else:
+                    error.add_note(f"cancellation requested for {handle}")
+            raise error
 
     async def _prepare_result(
         self,
