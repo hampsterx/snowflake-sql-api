@@ -17,8 +17,12 @@ from snowflake_sql_api.exceptions import (
     ResultNotReady,
     SnowflakeForbiddenError,
     SnowflakeRequestError,
+    SnowflakeRetryError,
+    SnowflakeTimeoutError,
 )
+from snowflake_sql_api.testing import FakeSnowflake
 
+from .streaming_support import call, collect, fake_client, wire_client
 from .support import ACCOUNT, STATEMENTS_URL, USER, ok_body, running_body, statement_url
 
 pytestmark = pytest.mark.regression
@@ -141,3 +145,82 @@ async def test_regression_403_raises_forbidden_error_async(
     await client.aclose()
     _assert_forbidden(info.value)
     assert route.call_count == 1
+
+
+# -- poll timeout cancels the statement the client started ---------------------
+
+SLOW_SQL = "SELECT slow"
+
+
+def _cancels(requests: list[httpx.Request]) -> list[str]:
+    return [r.url.path for r in requests if r.url.path.endswith("/cancel")]
+
+
+async def _run_owned(client, async_mode: bool, method: str) -> None:
+    if method == "stream":
+        await collect(client.query_stream(SLOW_SQL), async_mode)
+    else:
+        await call(client, async_mode, method, SLOW_SQL)
+
+
+@pytest.mark.parametrize("method", ["query", "execute", "stream"])
+async def test_regression_poll_timeout_cancels_owned_statement(
+    async_mode: bool, method: str
+) -> None:
+    """A client-owned poll that times out cancels the statement before raising.
+
+    Without the cancel, the client gives up but Snowflake keeps running the
+    statement until the account statement timeout (two days by default).
+    """
+    fake = FakeSnowflake()
+    fake.register(SLOW_SQL, [{"N": 1}], polls_before_ready=10)
+    async with fake_client(fake, async_mode, statement_timeout=0) as client:
+        with pytest.raises(SnowflakeTimeoutError) as info:
+            await _run_owned(client, async_mode, method)
+    assert _cancels(fake.requests) == ["/api/v2/statements/stmt-1/cancel"]
+    assert info.value.cancel_error is None
+    assert info.value.__cause__ is None
+    assert info.value.__notes__ == ["cancellation requested for stmt-1"]
+
+
+async def test_regression_poll_timeout_cancel_failure_keeps_timeout(
+    async_mode: bool, private_key_pem: bytes
+) -> None:
+    """A failed best-effort cancel is attached to the timeout, never raised instead."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/cancel"):
+            return httpx.Response(500, json={"message": "cancel unavailable"})
+        return httpx.Response(202, json=running_body("slow-h"))
+
+    async with wire_client(
+        handler, private_key_pem, async_mode, statement_timeout=0
+    ) as client:
+        with pytest.raises(SnowflakeTimeoutError) as info:
+            await call(client, async_mode, "query", SLOW_SQL)
+    err = info.value
+    assert "did not finish" in str(err)
+    assert isinstance(err.cancel_error, SnowflakeRetryError)
+    assert err.__cause__ is None
+    # The note must say the cancel failed, never that it was requested.
+    assert len(err.__notes__) == 1
+    assert err.__notes__[0].startswith("cancelling slow-h after the timeout failed:")
+    # The default policy retries the 500 before giving up on the cancel.
+    assert set(_cancels(requests)) == {"/api/v2/statements/slow-h/cancel"}
+
+
+async def test_regression_handle_result_timeout_does_not_cancel(
+    async_mode: bool,
+) -> None:
+    """The caller owns a submitted handle, so its poll timeout leaves it running."""
+    fake = FakeSnowflake()
+    fake.register(SLOW_SQL, [{"N": 1}], polls_before_ready=10)
+    async with fake_client(fake, async_mode) as client:
+        handle = await call(client, async_mode, "submit", SLOW_SQL)
+        with pytest.raises(SnowflakeTimeoutError) as info:
+            pending = handle.result(timeout=0)
+            await pending if async_mode else pending
+    assert _cancels(fake.requests) == []
+    assert info.value.cancel_error is None

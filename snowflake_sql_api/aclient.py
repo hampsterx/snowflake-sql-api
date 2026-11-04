@@ -30,7 +30,13 @@ import httpx
 from .auth import KeypairAuthenticator, account_hostname
 from .batches import BatchWriteResult, _BatchExecution, _BatchPlanner
 from .bindings import to_bindings
-from .client import DEFAULT_POLL_TIMEOUT, _columns_from, _rows_affected, _submission_id
+from .client import (
+    DEFAULT_POLL_TIMEOUT,
+    _columns_from,
+    _record_cancel_failure,
+    _rows_affected,
+    _submission_id,
+)
 from .escaping import quote_identifier, quote_name
 from .exceptions import (
     ResultNotReady,
@@ -80,10 +86,12 @@ class AsyncQueryHandle:
 
         With ``poll=False`` and the statement still running, raises
         :class:`~snowflake_sql_api.exceptions.ResultNotReady` (regression bug #3).
+        A polling timeout leaves the statement running; await :meth:`cancel`
+        to stop it.
         """
         response = await self._client._transport.get_statement(self.statement_handle)
         columns, raw_rows = await self._client._collect(
-            response, timeout=timeout, poll=poll
+            response, timeout=timeout, cancel_on_timeout=False, poll=poll
         )
         return coerce_rows(raw_rows, columns)
 
@@ -219,7 +227,10 @@ class AsyncSnowflakeClient:
             payload, request_id=request_id, async_exec=async_exec
         )
 
-    async def _poll(self, handle: str, timeout: Optional[float]) -> StatementResponse:
+    async def _poll(
+        self, handle: str, timeout: Optional[float], *, cancel_on_timeout: bool
+    ) -> StatementResponse:
+        """Poll ``handle``; see :meth:`SnowflakeClient._poll` for cancellation."""
         wait = DEFAULT_POLL_TIMEOUT if timeout is None else timeout
         deadline = time.time() + wait
         while True:
@@ -227,9 +238,17 @@ class AsyncSnowflakeClient:
             if not response.is_running:
                 return response
             if time.time() >= deadline:
-                raise SnowflakeTimeoutError(
+                error = SnowflakeTimeoutError(
                     f"statement {handle} did not finish within {wait}s"
                 )
+                if cancel_on_timeout:
+                    try:
+                        await self._transport.cancel(handle)
+                    except Exception as exc:
+                        _record_cancel_failure(error, handle, exc)
+                    else:
+                        error.add_note(f"cancellation requested for {handle}")
+                raise error
             await asyncio.sleep(self._poll_interval)
 
     async def _prepare_result(
@@ -237,6 +256,7 @@ class AsyncSnowflakeClient:
         response: StatementResponse,
         *,
         timeout: Optional[float],
+        cancel_on_timeout: bool,
         poll: bool = True,
     ) -> Tuple[List[ColumnMeta], str, Dict[str, Any]]:
         if response.is_running:
@@ -245,7 +265,9 @@ class AsyncSnowflakeClient:
             handle = response.statement_handle
             if handle is None:
                 raise SnowflakeRequestError("running statement has no handle")
-            response = await self._poll(handle, timeout)
+            response = await self._poll(
+                handle, timeout, cancel_on_timeout=cancel_on_timeout
+            )
         body = response.body
         columns = _columns_from(body)
         handle = response.statement_handle
@@ -258,10 +280,11 @@ class AsyncSnowflakeClient:
         response: StatementResponse,
         *,
         timeout: Optional[float],
+        cancel_on_timeout: bool,
         poll: bool = True,
     ) -> Tuple[List[ColumnMeta], List[List[Any]]]:
         columns, handle, body = await self._prepare_result(
-            response, timeout=timeout, poll=poll
+            response, timeout=timeout, cancel_on_timeout=cancel_on_timeout, poll=poll
         )
         return columns, await fetch_all_partitions_async(self._transport, handle, body)
 
@@ -269,7 +292,9 @@ class AsyncSnowflakeClient:
         self, sql: str, params: Params
     ) -> Tuple[List[ColumnMeta], AsyncGenerator[Row, None]]:
         columns, handle, body = await self._prepare_result(
-            await self._run(sql, params), timeout=self._statement_timeout
+            await self._run(sql, params),
+            timeout=self._statement_timeout,
+            cancel_on_timeout=True,
         )
         return columns, iter_result_rows_async(self._transport, handle, body, columns)
 
@@ -279,7 +304,7 @@ class AsyncSnowflakeClient:
         """Run ``sql`` and return all rows (fetching every partition)."""
         response = await self._run(sql, params)
         columns, raw_rows = await self._collect(
-            response, timeout=self._statement_timeout
+            response, timeout=self._statement_timeout, cancel_on_timeout=True
         )
         return coerce_rows(raw_rows, columns)
 
@@ -376,7 +401,9 @@ class AsyncSnowflakeClient:
             handle = response.statement_handle
             if handle is None:
                 raise SnowflakeRequestError("running statement has no handle")
-            response = await self._poll(handle, self._statement_timeout)
+            response = await self._poll(
+                handle, self._statement_timeout, cancel_on_timeout=True
+            )
         return _rows_affected(response.body)
 
     async def insert_many(
@@ -440,7 +467,9 @@ class AsyncSnowflakeClient:
                     handle = response.statement_handle
                     if handle is None:
                         raise SnowflakeRequestError("running statement has no handle")
-                    response = await self._poll(handle, self._statement_timeout)
+                    response = await self._poll(
+                        handle, self._statement_timeout, cancel_on_timeout=True
+                    )
                     execution.succeeded = True
                 affected = _rows_affected(response.body, strict=True)
             except Exception as exc:

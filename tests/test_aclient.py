@@ -10,6 +10,7 @@ import respx
 
 from snowflake_sql_api import AsyncSnowflakeClient
 from snowflake_sql_api.exceptions import ResultNotReady, SnowflakeConfigError
+from snowflake_sql_api.testing import FakeSnowflake, make_async_client
 
 from .support import ACCOUNT, STATEMENTS_URL, USER, ok_body, running_body, statement_url
 
@@ -49,6 +50,20 @@ async def test_async_execute(aclient: AsyncSnowflakeClient) -> None:
         )
     )
     assert await aclient.execute("UPDATE t SET x=1") == 4
+
+
+async def test_async_execute_polls_running_statement_for_rows_affected() -> None:
+    fake = FakeSnowflake()
+    fake.register(
+        "UPDATE t SET x = 1",
+        [],
+        columns=[],
+        polls_before_ready=1,
+        stats={"numRowsUpdated": 7},
+    )
+    async with make_async_client(fake) as client:
+        assert await client.execute("UPDATE t SET x = 1") == 7
+    assert [r.method for r in fake.requests] == ["POST", "GET", "GET"]
 
 
 @respx.mock

@@ -11,6 +11,7 @@ import respx
 
 from snowflake_sql_api import SnowflakeClient
 from snowflake_sql_api.exceptions import SnowflakeConfigError
+from snowflake_sql_api.testing import FakeSnowflake, make_client
 
 from .support import ACCOUNT, STATEMENTS_URL, USER, ok_body, running_body, statement_url
 
@@ -80,6 +81,22 @@ def test_execute_returns_rows_affected(client: SnowflakeClient) -> None:
         )
     )
     assert client.execute("INSERT INTO t VALUES (1)") == 5
+
+
+def test_execute_polls_running_statement_for_rows_affected() -> None:
+    # A 202 submit takes execute's poll branch; the count comes from the
+    # completed GET's stats, not the in-progress body.
+    fake = FakeSnowflake()
+    fake.register(
+        "UPDATE t SET x = 1",
+        [],
+        columns=[],
+        polls_before_ready=1,
+        stats={"numRowsUpdated": 7},
+    )
+    with make_client(fake) as client:
+        assert client.execute("UPDATE t SET x = 1") == 7
+    assert [r.method for r in fake.requests] == ["POST", "GET", "GET"]
 
 
 @respx.mock
