@@ -23,7 +23,15 @@ from snowflake_sql_api.testing import FakeSnowflake
 from snowflake_sql_api.transport import StatementResponse
 from snowflake_sql_api.types import ColumnMeta
 
-from .streaming_support import advance, call, close, collect, fake_client, wire_client
+from .streaming_support import (
+    advance,
+    call,
+    close,
+    collect,
+    expire_poll_deadlines,
+    fake_client,
+    wire_client,
+)
 from .support import ok_body
 
 INT_COL = [{"name": "N", "type": "fixed", "scale": 0}]
@@ -158,10 +166,13 @@ async def test_stream_polls_before_yielding(async_mode: bool) -> None:
     assert len(fake.requests) == 4
 
 
-async def test_stream_preserves_poll_timeout(async_mode: bool) -> None:
+async def test_stream_preserves_poll_timeout(
+    async_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expire_poll_deadlines(monkeypatch)
     fake = FakeSnowflake()
     fake.register("SELECT slow", [{"N": 3}], polls_before_ready=10)
-    async with fake_client(fake, async_mode, statement_timeout=0) as client:
+    async with fake_client(fake, async_mode, statement_timeout=1) as client:
         with pytest.raises(SnowflakeTimeoutError):
             await collect(client.query_stream("SELECT slow"), async_mode)
 

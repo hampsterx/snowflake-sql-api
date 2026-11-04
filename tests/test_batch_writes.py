@@ -26,7 +26,7 @@ from snowflake_sql_api import (
 )
 from snowflake_sql_api.bindings import to_bindings
 
-from .streaming_support import wire_client
+from .streaming_support import expire_poll_deadlines, wire_client
 
 
 async def insert(client: Any, async_mode: bool, rows: Any, **kwargs: Any) -> Any:
@@ -355,8 +355,10 @@ async def test_batch_two_remote_fault_keeps_prefix_and_attempt_history(
 @pytest.mark.parametrize("post_retry", [False, True])
 @pytest.mark.parametrize("failure", ["sql", "timeout", "remote", "success"])
 async def test_running_post_retains_parent_context_through_polling(
-    async_mode, private_key_pem, post_retry, failure
+    async_mode, private_key_pem, post_retry, failure, monkeypatch
 ):
+    if failure == "timeout":
+        expire_poll_deadlines(monkeypatch)
     requests, notes, cancels = [], [], []
     posts, gets = 0, 0
 
@@ -385,12 +387,10 @@ async def test_running_post_retains_parent_context_through_polling(
         handler,
         private_key_pem,
         async_mode,
-        statement_timeout=0,
+        statement_timeout=60,
         on_query=lambda *a: notes.append(a),
     ) as client:
         if failure == "success":
-            # A positive wait permits an intermediate running GET.
-            client._statement_timeout = 60
             assert (await insert(client, async_mode, [[1]], max_rows=1)).input_rows == 1
         else:
             with pytest.raises(BatchWriteError) as info:

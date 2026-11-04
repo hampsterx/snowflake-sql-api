@@ -8,8 +8,9 @@ design principle: a feature on one side should exist on the other.
 from __future__ import annotations
 
 import asyncio
-import time
+import contextlib
 import uuid
+from time import monotonic
 from typing import (
     Any,
     AsyncGenerator,
@@ -51,6 +52,47 @@ from .transport import AsyncTransport, StatementResponse
 from .types import ColumnMeta, Row, coerce_rows
 
 __all__ = ["AsyncSnowflakeClient", "AsyncQueryHandle"]
+
+#: Seconds a best-effort cancel may take after the polling task is cancelled.
+CANCEL_ON_TASK_CANCEL_TIMEOUT = 5.0
+
+
+# Cancel requests abandoned at the deadline but not yet finished. The event
+# loop holds only weak references to tasks, so these keep each one alive until
+# its own cancellation completes.
+_abandoned_cancels: set[asyncio.Task[Any]] = set()
+
+
+def _settle_cancel(task: asyncio.Task[Any]) -> None:
+    _abandoned_cancels.discard(task)
+    if not task.cancelled():
+        task.exception()  # retrieved: a failed best-effort cancel is not reported
+
+
+async def _cancel_after_task_cancel(transport: AsyncTransport, handle: str) -> None:
+    """Best-effort cancel of ``handle`` while a ``CancelledError`` propagates.
+
+    The request runs in its own task, so ``asyncio.wait`` neither cancels it
+    nor is held up by it. A further cancellation of the waiting task is
+    absorbed until the request finishes, since returning early would let the
+    caller close the HTTP client the request (or its retry) still needs. The
+    whole wait is bounded by :data:`CANCEL_ON_TASK_CANCEL_TIMEOUT`: past it the
+    request is cancelled and abandoned without waiting for its cleanup, which
+    can itself stall. Every failure is swallowed, since the caller re-raises
+    the original ``CancelledError``.
+    """
+    task = asyncio.ensure_future(transport.cancel(handle))
+    task.add_done_callback(_settle_cancel)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CANCEL_ON_TASK_CANCEL_TIMEOUT
+    while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            _abandoned_cancels.add(task)
+            task.cancel()
+            return
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait({task}, timeout=remaining)
 
 
 class AsyncQueryHandle:
@@ -165,26 +207,40 @@ class AsyncSnowflakeClient(_ClientBase):
     async def _poll(
         self, handle: str, timeout: Optional[float], *, cancel_on_timeout: bool
     ) -> StatementResponse:
-        """Poll ``handle``; see :meth:`SnowflakeClient._poll` for cancellation."""
+        """Poll ``handle``; see :meth:`SnowflakeClient._poll` for cancellation.
+
+        Unlike the sync client's ``KeyboardInterrupt``, a task cancellation
+        while a client-owned poll waits also cancels the statement: a bounded,
+        best-effort request (see :func:`_cancel_after_task_cancel`), after which
+        the ``CancelledError`` is re-raised unchanged.
+        """
         wait = DEFAULT_POLL_TIMEOUT if timeout is None else timeout
-        deadline = time.time() + wait
-        while True:
-            response = await self._transport.get_statement(handle)
-            if not response.is_running:
-                return response
-            if time.time() >= deadline:
-                error = SnowflakeTimeoutError(
-                    f"statement {handle} did not finish within {wait}s"
-                )
-                if cancel_on_timeout:
-                    try:
-                        await self._transport.cancel(handle)
-                    except Exception as exc:
-                        _record_cancel_failure(error, handle, exc)
-                    else:
-                        error.add_note(f"cancellation requested for {handle}")
-                raise error
-            await asyncio.sleep(self._poll_interval)
+        deadline = monotonic() + wait
+        try:
+            while True:
+                response = await self._transport.get_statement(handle)
+                if not response.is_running:
+                    return response
+                if monotonic() >= deadline:
+                    break
+                await asyncio.sleep(self._poll_interval)
+            error = SnowflakeTimeoutError(
+                f"statement {handle} did not finish within {wait}s"
+            )
+            if cancel_on_timeout:
+                try:
+                    await self._transport.cancel(handle)
+                except Exception as exc:
+                    _record_cancel_failure(error, handle, exc)
+                else:
+                    error.add_note(f"cancellation requested for {handle}")
+        except asyncio.CancelledError:
+            # Also reached when the task is cancelled during the timeout cancel
+            # above: that request was cut off, so it is sent again here.
+            if cancel_on_timeout:
+                await _cancel_after_task_cancel(self._transport, handle)
+            raise
+        raise error
 
     async def _prepare_result(
         self,

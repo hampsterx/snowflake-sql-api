@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+import itertools
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable
 
 import httpx
+import pytest
 
 from snowflake_sql_api import AsyncSnowflakeClient, RetryPolicy, SnowflakeClient
 from snowflake_sql_api.testing import FakeSnowflake, make_async_client, make_client
 
 from .support import ACCOUNT, USER
+
+
+def expire_poll_deadlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every client polling deadline pass by the first running poll.
+
+    Both clients read ``monotonic`` from their own module, so only their
+    deadlines move; the event loop's clock is untouched. Each reading lands a
+    million seconds after the last, past any positive ``statement_timeout``.
+    """
+    clock = itertools.count(0.0, 1_000_000.0).__next__
+    monkeypatch.setattr("snowflake_sql_api.client.monotonic", clock)
+    monkeypatch.setattr("snowflake_sql_api.aclient.monotonic", clock)
 
 
 @asynccontextmanager
@@ -32,12 +46,12 @@ async def wire_client(
     async_mode: bool,
     **kwargs: Any,
 ) -> AsyncIterator[Any]:
-    options = dict(
-        private_key=private_key,
-        poll_interval=0,
-        retry_policy=RetryPolicy(base_backoff=0),
+    options = {
+        "private_key": private_key,
+        "poll_interval": 0,
+        "retry_policy": RetryPolicy(base_backoff=0),
         **kwargs,
-    )
+    }
     transport = httpx.MockTransport(handler)
     if async_mode:
         async with (
