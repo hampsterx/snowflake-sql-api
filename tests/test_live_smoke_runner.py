@@ -102,9 +102,12 @@ def test_live_smoke_incomplete_file_fails(smoke_tree, name, source):
 
 
 def test_live_smoke_deselection_fails(smoke_tree):
+    (smoke_tree / "tests" / "smoke" / "test_smoke.py").write_text(
+        "def test_a(): pass\ndef test_b(): pass\n"
+    )
     (smoke_tree / "conftest.py").write_text(
         "def pytest_collection_modifyitems(config, items):\n"
-        "    config.hook.pytest_deselected(items=[items.pop()])\n"
+        "    config.hook.pytest_deselected(items=[items.pop(0)])\n"
     )
     result = run_smoke(smoke_tree)
     assert result.returncode != 0, result.stdout + result.stderr
