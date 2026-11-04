@@ -33,16 +33,11 @@ stays small and cold-starts quickly. Core dependencies: `httpx`, `PyJWT`,
 - Query helpers, DML, batch insert, async statement submission
 - Caller-owned submission UUIDs and explicit replay across worker restarts
 - A small CLI for ad-hoc queries
-- Optional pandas (`[pandas]`) and typed-row (`[pydantic]`) helpers, kept out of
-  the default install
 
 ## Install
 
 ```bash
 pip install snowflake-sql-api
-# optional extras
-pip install "snowflake-sql-api[pandas]"
-pip install "snowflake-sql-api[pydantic]"
 ```
 
 ## Quick start
@@ -103,11 +98,16 @@ Insert a record stream in bounded requests:
 ```python
 with SnowflakeClient.from_env() as client:
     progress = client.insert_batches(
-        "events", ["id", "label"], ((i, f"event {i}") for i in range(2500)),
+        "EVENTS", ["ID", "LABEL"], ((i, f"event {i}") for i in range(2500)),
         max_rows=1000, max_bytes=1_000_000,
     )
     print(progress.input_rows, progress.rows_affected)
 ```
+
+Table and column names are quoted exactly as given, so they are case-sensitive:
+a table created as `CREATE TABLE events (id INT, label TEXT)` is stored as
+`EVENTS` with columns `ID` and `LABEL`, and must be addressed in uppercase. This
+assumes Snowflake's default `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`.
 
 `insert_many()` sends one statement; `insert_batches()` sends sequential statements
 and can partially complete. Its byte budget covers the exact JSON body. On failure,

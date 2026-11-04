@@ -409,7 +409,19 @@ class AsyncSnowflakeClient:
     async def insert_many(
         self, table: str, columns: Sequence[str], rows: Sequence[Sequence[Any]]
     ) -> int:
-        """Batch-insert ``rows`` into ``table`` via server-side bindings."""
+        """Batch-insert ``rows`` into ``table`` via server-side bindings.
+
+        Builds a single multi-row ``INSERT ... VALUES`` with positional
+        bindings; identifiers are quoted, values are bound (never interpolated).
+
+        Table and column names are quoted exactly as given, so they are
+        case-sensitive: a table created as ``CREATE TABLE events (id INT)`` is
+        stored as ``EVENTS`` / ``ID`` and must be addressed as ``"EVENTS"`` and
+        ``["ID"]``. Lowercase names only match objects created with quoted
+        lowercase identifiers. This assumes Snowflake's default
+        ``QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE``; with it ``TRUE``, quoted
+        names resolve as uppercase.
+        """
         if not columns:
             raise SnowflakeConfigError("insert_many requires at least one column")
         if not rows:
@@ -444,6 +456,14 @@ class AsyncSnowflakeClient:
         Independent statements can commit before a later failure. BatchWriteError
         reports confirmed progress and uncertain outcomes; see docs/batch-writes.md.
         Input is an ordinary iterable, consumed on the calling thread.
+
+        Table and column names are quoted exactly as given, so they are
+        case-sensitive: a table created as ``CREATE TABLE events (id INT)`` is
+        stored as ``EVENTS`` / ``ID`` and must be addressed as ``"EVENTS"`` and
+        ``["ID"]``. Lowercase names only match objects created with quoted
+        lowercase identifiers. This assumes Snowflake's default
+        ``QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE``; with it ``TRUE``, quoted
+        names resolve as uppercase.
         """
         planner = _BatchPlanner(
             table, columns, rows, max_rows, max_bytes, self._build_payload

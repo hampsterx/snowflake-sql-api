@@ -3,8 +3,9 @@
 The package's whole value proposition is a small install and a fast cold start
 (serverless / Lambda). Two regressions would silently erode that:
 
-1. A heavy optional dependency (pandas / pyarrow) getting imported at module top
-   instead of behind its extra. The ``[pandas]`` feature must stay opt-in.
+1. A heavy dependency (pandas / pyarrow / numpy) getting imported at module top.
+   No runtime extra ships today; any future feature that needs one must sit
+   behind its own extra with a lazy import.
 2. Import time ballooning for any reason.
 
 Both checks run in a **fresh subprocess** so the parent pytest process's
@@ -20,9 +21,9 @@ from __future__ import annotations
 import subprocess
 import sys
 
-# Heavy optional deps that a bare import must never pull in. pandas is the
-# ``[pandas]`` extra; pyarrow/numpy ride in with it. If any is imported at module
-# top, something bypassed the optional-import guard.
+# Heavy deps that a bare import must never pull in (pyarrow/numpy usually ride in
+# with pandas). If any is imported at module top, a heavy dependency reached the
+# module-load path instead of sitting behind an extra with a lazy import.
 FORBIDDEN_ON_BARE_IMPORT = ("pandas", "pyarrow", "numpy")
 
 # Generous ceiling: the real cold import (httpx + PyJWT + cryptography, all pure

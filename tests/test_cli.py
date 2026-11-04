@@ -155,3 +155,10 @@ def test_regression_missing_key_path_reports_error_without_traceback(
     assert output.out == ""
     assert "error: could not read private key file" in output.err
     assert "Traceback" not in output.err
+
+
+def test_json_default_is_the_shared_export_serializer() -> None:
+    """The CLI reuses the export serializer rather than keeping its own copy."""
+    from snowflake_sql_api import exports
+
+    assert cli._json_default is exports._json_default

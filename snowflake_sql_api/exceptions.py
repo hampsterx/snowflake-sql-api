@@ -81,10 +81,14 @@ class BatchWriteError(SnowflakeError):
 
 
 class SnowflakeConfigError(SnowflakeError):
-    """Invalid client configuration or an unsupported result shape.
+    """Invalid configuration or argument, or an unsupported result shape.
 
-    Missing credentials and optional extras fail before a network call.
-    Duplicate column names are detected from completed result metadata.
+    Raised locally, for example for no account, an unreadable private key, an
+    unbindable parameter value, or invalid write-helper columns, rows or limits.
+    Most are raised before any request is sent. Duplicate column names are
+    detected from completed result metadata, after the statement has run. In
+    ``insert_batches``, a row error found during iteration arrives as the cause
+    of a ``BatchWriteError``.
     """
 
 

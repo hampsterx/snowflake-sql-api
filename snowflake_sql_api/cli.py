@@ -3,7 +3,7 @@
 A thin wrapper over :class:`~snowflake_sql_api.client.SnowflakeClient`, reading
 connection settings from the environment (``SNOWFLAKE_*``). This is the basic
 JSON-output ``query`` command; richer output formats (``--format
-table|csv|json|jsonl``, file input, spinner) arrive with the v0.2.0 toolkit.
+table|csv|json|jsonl``, file input, spinner) are planned for a later release.
 """
 
 from __future__ import annotations
@@ -11,12 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime, time
-from decimal import Decimal
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 from . import __version__
 from .exceptions import SnowflakeError
+from .exports import _json_default
 
 __all__ = ["main", "build_parser"]
 
@@ -33,16 +32,6 @@ def build_parser() -> argparse.ArgumentParser:
     query = sub.add_parser("query", help="Run a SQL statement and print the result.")
     query.add_argument("sql", help="SQL statement to execute.")
     return parser
-
-
-def _json_default(value: Any) -> str:
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).hex()
-    raise TypeError(f"cannot serialize {type(value).__name__}")
 
 
 def _run_query(sql: str) -> int:

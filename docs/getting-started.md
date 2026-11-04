@@ -10,13 +10,6 @@ page gets you from install to a first query.
 pip install snowflake-sql-api
 ```
 
-Optional extras (kept out of the default install to stay small):
-
-```bash
-pip install "snowflake-sql-api[pandas]"    # DataFrame output helpers
-pip install "snowflake-sql-api[pydantic]"  # typed-row mapping
-```
-
 Requires Python 3.11 or newer. Core dependencies are `httpx`, `PyJWT`, and
 `cryptography`.
 
@@ -107,8 +100,10 @@ failure behavior.
 `insert_batches()` consumes an ordinary iterable once and submits bounded,
 sequential INSERT statements. Earlier batches can commit before a later failure;
 `BatchWriteError` carries confirmed progress and uncertain outcomes. Use
-`insert_many()` when you want one statement. See [batch-writes.md](batch-writes.md)
-for byte budgets, async input and recovery.
+`insert_many()` when you want one statement. Both quote table and column names
+exactly as given, so a conventionally created table takes uppercase names
+(`"EVENTS"`, `["ID"]`). See [batch-writes.md](batch-writes.md) for identifier
+case, byte budgets, async input and recovery.
 
 ## Configuration from the environment
 

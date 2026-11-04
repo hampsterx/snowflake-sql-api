@@ -15,8 +15,8 @@ This client is pure Python over `httpx`, so it is small and quick to cold-start,
 which matters in serverless / Lambda environments.
 
 It offers both **synchronous and asynchronous** clients, keypair (JWT) auth, type
-coercion, multi-partition result handling, a CLI, and optional pandas / typed-row
-helpers.
+coercion, multi-partition result handling, bounded batch writes, CSV/JSONL
+exports, a CLI, and a shipped test helper.
 
 > Clean-room reimplementation inspired by and API-compatible with the (now
 > unmaintained) [`pps-19012/snowflake-rest`](https://github.com/pps-19012/snowflake-rest).
@@ -39,19 +39,20 @@ Module layout under `snowflake_sql_api/` (clean separation, `py.typed`):
 | `exceptions.py` | Typed exception hierarchy |
 | `client.py` | Synchronous `SnowflakeClient` (query helpers, DML, batch insert, async-submit handle) |
 | `aclient.py` | Asynchronous client (same surface, `await`-based) |
-| `row_mapping.py` | Optional dataclass / Pydantic row mapping |
 | `cli.py` | Command-line interface (`snowflake-sql-api query ...`) |
 | `testing.py` | Shipped test helper: `FakeSnowflake` (httpx.MockTransport), `make_client`/`make_async_client`, pytest fixtures (pytest11) |
 
 ### Dependencies
 
 - **Core** (always installed): `httpx`, `PyJWT`, `cryptography`.
-- **Extras**: `[pandas]` (DataFrame output), `[pydantic]` (typed row mapping),
-  `[dev]` (test/lint/build tooling).
+- **Extras**: `[dev]` (test/lint/build tooling) is the only one. No runtime
+  extra ships today.
 
-Heavy features sit behind extras so the default install stays small. Optional
-imports are guarded: using a feature without its extra raises a clear error rather
-than failing at import time.
+A future feature with a heavy dependency goes behind a new extra so the default
+install stays small, with its import guarded: using it without the extra raises
+a clear error rather than failing at import time.
+`tests/test_import_footprint.py` fails if a bare `import snowflake_sql_api` pulls
+in pandas, pyarrow or numpy.
 
 ## Development Commands
 
@@ -118,6 +119,12 @@ the linked regression test first.
   are generators (async generators on the async client), so `on_query` fires
   once when consumption starts, including when an export consumes the stream.
   Regression: `test_regression_bug2_stream_notifies_once_and_binds_params`.
+- **Write-helper identifiers are case-exact** (`escaping.quote_identifier`, used
+  by `insert_many` / `insert_batches`). Names are quoted as given and never
+  folded, so under Snowflake's default `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`
+  a table created unquoted (`events`) must be passed as `"EVENTS"` with columns
+  `["ID"]`. Folding would retarget writes aimed at quoted lowercase objects.
+  Regression: `test_regression_write_helpers_quote_identifiers_case_exact`.
 - **Coverage uses `coverage run`, not `pytest --cov`.** The package ships a pytest
   plugin via the `pytest11` entry point, so `snowflake_sql_api.testing` (and the
   whole package) is imported at plugin-load time, before pytest-cov starts
@@ -128,10 +135,24 @@ the linked regression test first.
 ## Testing
 
 - Unit tests mock the HTTP layer; no network access required for the default suite.
-- Mock the client in your own tests with the shipped `snowflake_sql_api.testing`
-  helper (`FakeSnowflake` + `make_client`/`make_async_client`, or the
-  auto-registered `fake_snowflake` / `snowflake_client` / `async_snowflake_client`
-  fixtures). No respx. See `docs/testing.md`.
+- This repo's suite mocks HTTP three ways, chosen per test file. Match the file
+  you are extending:
+  - `respx` (a `[dev]` dependency): `tests/test_client.py`,
+    `tests/test_aclient.py`, `tests/test_transport.py`, most of
+    `tests/test_regression.py`.
+  - A raw `httpx.MockTransport` handler: `tests/test_batch_writes.py` (through
+    `wire_client` in `tests/streaming_support.py`) and
+    `tests/test_submissions.py`.
+  - The shipped `snowflake_sql_api.testing` helper (`FakeSnowflake` +
+    `make_client`/`make_async_client`, and the auto-registered
+    `fake_snowflake` / `snowflake_client` / `async_snowflake_client`
+    fixtures): `tests/test_cli.py`, the write-helper case-exact test in
+    `tests/test_regression.py`, and alongside `wire_client` in
+    `tests/test_exports.py`, `tests/test_streaming.py` and
+    `tests/test_result_validation.py`. `tests/test_testing.py` covers the
+    helper itself.
+- Downstream users need only the shipped helper, not respx. See
+  `docs/testing.md`.
 - Each fixed bug gets a named regression test (`test_regression_*`) so it cannot
   silently return.
 - Target coverage: >= 89%, enforced across Python 3.11-3.15. Run with

@@ -13,7 +13,7 @@ records = ((i, f"record {i}") for i in range(2500))
 with SnowflakeClient.from_env() as client:
     try:
         progress = client.insert_batches(
-            "events", ["id", "label"], records,
+            "EVENTS", ["ID", "LABEL"], records,
             max_rows=1000, max_bytes=1_000_000,
         )
     except BatchWriteError as exc:
@@ -29,20 +29,36 @@ The async client exposes the same method, awaited for the final result:
 from snowflake_sql_api import AsyncSnowflakeClient
 
 async with AsyncSnowflakeClient.from_env() as client:
-    progress = await client.insert_batches("events", ["id"], ((i,) for i in range(2500)))
+    progress = await client.insert_batches("EVENTS", ["ID"], ((i,) for i in range(2500)))
 ```
 
 The input remains a synchronous iterable. Its production runs on the calling
 thread, so a slow iterator can block the async event loop. `AsyncIterable`
 input and background input production are not supported.
 
+## Identifier case
+
+Table and column names are quoted exactly as given, in `insert_batches()` and
+`insert_many()` alike, so they are case-sensitive. Snowflake stores an unquoted
+identifier in uppercase: a table created as `CREATE TABLE events (id INT, label
+TEXT)` is `EVENTS` with columns `ID` and `LABEL`. Pass those uppercase names.
+`insert_batches("events", ["id"], ...)` sends `INSERT INTO "events" ("id")` and
+fails against that table, because no object named lowercase `events` exists. Use
+lowercase names only for objects created with quoted lowercase identifiers. A
+qualified name such as `MY_DB.MY_SCHEMA.EVENTS` is split on `.` and each part is
+quoted the same way.
+
+This describes Snowflake's default, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`. When
+an account, user or session sets that parameter to `TRUE`, Snowflake resolves
+quoted identifiers as uppercase too, so lowercase names also reach `EVENTS`.
+
 ## Limits and consumption
 
 `max_rows` defaults to 1000 and must be a positive integer no larger than 200,000,
 the [Snowflake VALUES row limit](https://docs.snowflake.com/en/sql-reference/sql/insert#usage-notes).
 `max_bytes` defaults to 1,000,000 and must be a positive integer. Booleans are not
-accepted as limits. Columns must be nonempty; identifiers are quoted and values
-are bound, as in `insert_many()`.
+accepted as limits. Columns must be nonempty; identifiers are quoted case-exact
+and values are bound, as in `insert_many()`.
 
 The byte budget counts the exact UTF-8 JSON request body, including SQL,
 placeholders, binding keys and encoded values, context, timeout and statement
