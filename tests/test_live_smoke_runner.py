@@ -77,6 +77,7 @@ def test_live_smoke_refuses_ambient_selection(smoke_tree, monkeypatch):
 
 
 def test_live_smoke_all_pass(smoke_tree):
+    (smoke_tree / "pytest.ini").write_text("[pytest]\naddopts = -k nothing\n")
     result = run_smoke(smoke_tree)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "3 passed" in result.stdout
