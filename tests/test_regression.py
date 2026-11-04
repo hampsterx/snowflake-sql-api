@@ -410,38 +410,74 @@ async def test_regression_async_task_cancel_bounds_a_hanging_cancel(
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
     assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"]
-    assert not aclient_module._pending_cancels
 
 
-async def test_regression_async_task_cancel_is_shielded_from_a_second_cancel(
+async def test_regression_async_task_cancel_survives_a_second_cancel(
     private_key_pem: bytes,
 ) -> None:
-    """Cancelling the task again does not abandon the cancel request mid-send."""
+    """A second task cancel abandons neither the cancel request nor its retry.
+
+    The client context lives inside the cancelled task, as it does for a caller
+    using ``async with``: returning from the cleanup early would close the HTTP
+    client before the retried cancel is sent, leaving the statement running.
+    """
     requests: list[httpx.Request] = []
     release = asyncio.Event()
-    answered: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/cancel"):
+            if len(_cancels(requests)) == 1:
+                await release.wait()
+                return httpx.Response(503, json={"message": "busy"})
+            return httpx.Response(200, json={"statementHandle": "slow-h"})
+        return httpx.Response(202, json=running_body("slow-h"))
+
+    async def owned_query() -> None:
+        async with wire_client(handler, private_key_pem, True) as client:
+            await client.query(SLOW_SQL)
+
+    task = asyncio.ensure_future(owned_query())
+    await _first_poll(requests)
+    task.cancel()
+    await _until(lambda: _cancels(requests), "the cancel request")
+    task.cancel()
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 1)
+    assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"] * 2
+
+
+async def test_regression_async_task_cancel_during_timeout_cancel_resends(
+    private_key_pem: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task cancelled while the timeout's own cancel is in flight sends it again.
+
+    The cancellation cuts that request off, so without the resend the statement
+    keeps running exactly as if no cancel had been attempted.
+    """
+    expire_poll_deadlines(monkeypatch)
+    requests: list[httpx.Request] = []
 
     async def on_cancel() -> None:
-        await release.wait()
-        answered.append("cancel")
+        if len(_cancels(requests)) == 1:
+            await asyncio.Event().wait()  # held until the task cancel cuts it off
 
     async with wire_client(
-        _running_async_handler(requests, on_cancel=on_cancel), private_key_pem, True
+        _running_async_handler(requests, on_cancel=on_cancel),
+        private_key_pem,
+        True,
+        statement_timeout=1,
     ) as client:
         task = asyncio.ensure_future(client.query(SLOW_SQL))
-        await _first_poll(requests)
-        task.cancel()
-        await _until(lambda: _cancels(requests), "the cancel request")
+        await _until(lambda: _cancels(requests), "the timeout's cancel request")
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
-        assert answered == []
-        pending = list(aclient_module._pending_cancels)
-        assert len(pending) == 1
-        release.set()
-        await asyncio.wait(pending)
-    assert answered == ["cancel"]
-    assert not aclient_module._pending_cancels
+            await asyncio.wait_for(task, 1)
+    assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"] * 2
 
 
 async def test_regression_async_handle_result_task_cancel_does_not_cancel(
