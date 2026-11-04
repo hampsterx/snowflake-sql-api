@@ -8,14 +8,11 @@ design principle: a feature on one side should exist on the other.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 import uuid
-from pathlib import Path
 from typing import (
     Any,
     AsyncGenerator,
-    Callable,
     Dict,
     Iterable,
     List,
@@ -27,9 +24,8 @@ from typing import (
 
 import httpx
 
-from .auth import KeypairAuthenticator, account_hostname
+from ._client_base import OnQuery, Params, _ClientBase
 from .batches import BatchWriteResult, _BatchExecution, _BatchPlanner
-from .bindings import to_bindings
 from .client import (
     DEFAULT_POLL_TIMEOUT,
     _columns_from,
@@ -37,10 +33,8 @@ from .client import (
     _rows_affected,
     _submission_id,
 )
-from .escaping import quote_identifier, quote_name
 from .exceptions import (
     ResultNotReady,
-    SnowflakeConfigError,
     SnowflakeError,
     SnowflakeRequestError,
     SnowflakeTimeoutError,
@@ -57,12 +51,6 @@ from .transport import AsyncTransport, StatementResponse
 from .types import ColumnMeta, Row, coerce_rows
 
 __all__ = ["AsyncSnowflakeClient", "AsyncQueryHandle"]
-
-#: Positional bind parameters for a statement.
-Params = Optional[Sequence[Any]]
-
-#: Callback fired for every executed statement (logging / instrumentation hook).
-OnQuery = Callable[[str, "Params"], None]
 
 
 class AsyncQueryHandle:
@@ -105,7 +93,7 @@ class AsyncQueryHandle:
         await self._client._transport.cancel(self.statement_handle)
 
 
-class AsyncSnowflakeClient:
+class AsyncSnowflakeClient(_ClientBase):
     """Asynchronous client for the Snowflake SQL API."""
 
     def __init__(
@@ -131,35 +119,25 @@ class AsyncSnowflakeClient:
         on_query: Optional[OnQuery] = None,
         http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
-        if private_key is None and private_key_path is None:
-            raise SnowflakeConfigError("a private_key or private_key_path is required")
-        try:
-            key_bytes = (
-                private_key
-                if private_key is not None
-                else Path(private_key_path).read_bytes()  # type: ignore[arg-type]
-            )
-        except OSError as exc:
-            raise SnowflakeConfigError(
-                f"could not read private key file: {private_key_path}"
-            ) from exc
-        self.account = account
-        self.user = user
-        self.role = role
-        self.warehouse = warehouse
-        self.database = database
-        self.schema = schema
-        self.timezone = timezone
-        self._parameters = dict(parameters) if parameters else {}
-        self._statement_timeout = statement_timeout
-        self._poll_interval = poll_interval
-        self.on_query = on_query
-
-        self._auth = KeypairAuthenticator(
-            account, user, key_bytes, private_key_passphrase=private_key_passphrase
+        super().__init__(
+            account,
+            user,
+            private_key=private_key,
+            private_key_path=private_key_path,
+            private_key_passphrase=private_key_passphrase,
+            role=role,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            timezone=timezone,
+            parameters=parameters,
+            host=host,
+            statement_timeout=statement_timeout,
+            poll_interval=poll_interval,
+            on_query=on_query,
         )
         self._transport = AsyncTransport(
-            host or account_hostname(account),
+            self._host,
             self._auth,
             timeout=timeout,
             retry_policy=retry_policy,
@@ -170,52 +148,9 @@ class AsyncSnowflakeClient:
     @classmethod
     def from_env(cls) -> AsyncSnowflakeClient:
         """Construct a client from ``SNOWFLAKE_*`` environment variables."""
-        account = os.environ.get("SNOWFLAKE_ACCOUNT")
-        user = os.environ.get("SNOWFLAKE_USER")
-        if not account or not user:
-            raise SnowflakeConfigError(
-                "SNOWFLAKE_ACCOUNT and SNOWFLAKE_USER are required"
-            )
-        key_pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY")
-        return cls(
-            account=account,
-            user=user,
-            private_key=key_pem.encode() if key_pem else None,
-            private_key_path=os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH"),
-            private_key_passphrase=os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
-            role=os.environ.get("SNOWFLAKE_ROLE"),
-            warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE"),
-            database=os.environ.get("SNOWFLAKE_DATABASE"),
-            schema=os.environ.get("SNOWFLAKE_SCHEMA"),
-            host=os.environ.get("SNOWFLAKE_HOST"),
-        )
+        return super().from_env()
 
     # -- internals --------------------------------------------------------
-
-    def _build_payload(self, sql: str, params: Params) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"statement": sql}
-        if self._statement_timeout is not None:
-            payload["timeout"] = self._statement_timeout
-        if self.database:
-            payload["database"] = self.database
-        if self.schema:
-            payload["schema"] = self.schema
-        if self.warehouse:
-            payload["warehouse"] = self.warehouse
-        if self.role:
-            payload["role"] = self.role
-        parameters = dict(self._parameters)
-        if self.timezone:
-            parameters["TIMEZONE"] = self.timezone
-        if parameters:
-            payload["parameters"] = parameters
-        if params:
-            payload["bindings"] = to_bindings(params)
-        return payload
-
-    def _notify(self, sql: str, params: Params) -> None:
-        if self.on_query is not None:
-            self.on_query(sql, params)
 
     async def _run(
         self, sql: str, params: Params, *, async_exec: bool = False
@@ -422,22 +357,10 @@ class AsyncSnowflakeClient:
         ``QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE``; with it ``TRUE``, quoted
         names resolve as uppercase.
         """
-        if not columns:
-            raise SnowflakeConfigError("insert_many requires at least one column")
-        if not rows:
+        statement = self._insert_statement(table, columns, rows)
+        if statement is None:
             return 0
-        width = len(columns)
-        flat: List[Any] = []
-        for row in rows:
-            if len(row) != width:
-                raise SnowflakeConfigError(
-                    f"each row must have {width} values, got {len(row)}"
-                )
-            flat.extend(row)
-        cols_sql = ", ".join(quote_identifier(c) for c in columns)
-        placeholder = "(" + ", ".join(["?"] * width) + ")"
-        values_sql = ", ".join([placeholder] * len(rows))
-        sql = f"INSERT INTO {quote_name(table)} ({cols_sql}) VALUES {values_sql}"
+        sql, flat = statement
         return await self.execute(sql, flat)
 
     # -- async submit -----------------------------------------------------
