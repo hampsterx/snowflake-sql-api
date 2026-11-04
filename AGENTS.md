@@ -86,7 +86,8 @@ unless its variables are set:
 - `tests/smoke/test_smoke.py` (read-only, synthetic `SELECT`/`GENERATOR`
   queries) needs keypair credentials: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`,
   `SNOWFLAKE_PRIVATE_KEY_PATH`. It builds the client with `from_env()`, so the
-  optional `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`, `SNOWFLAKE_ROLE`,
+  optional `SNOWFLAKE_PRIVATE_KEY` (an inline PEM, used instead of the path
+  when set), `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`, `SNOWFLAKE_ROLE`,
   `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` and
   `SNOWFLAKE_HOST` apply too. Set `SNOWFLAKE_WAREHOUSE` unless the user has a
   default warehouse: the `GENERATOR` partition probes need one.

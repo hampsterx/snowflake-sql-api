@@ -157,7 +157,10 @@ cancel.
   own task, is not abandoned if the task is cancelled again, and is given at
   most 5 seconds; a failed cancel is not reported. A task cancelled while
   awaiting `AsyncQueryHandle.result()` leaves the statement running, as a
-  timeout there does.
+  timeout there does. The cancel needs the statement handle, so it is sent
+  only once Snowflake has answered the submit with HTTP 202: a task cancelled
+  while the submit request is still waiting leaves the statement running until
+  its server-side `timeout` or the account's `STATEMENT_TIMEOUT_IN_SECONDS`.
 - **Sync `KeyboardInterrupt`.** The sync client does not cancel the statement
   on Ctrl-C: an HTTP call made while the process is being interrupted can hang.
   The statement keeps running until its server-side `timeout` or the account's
