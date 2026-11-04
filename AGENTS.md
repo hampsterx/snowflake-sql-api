@@ -37,6 +37,7 @@ Module layout under `snowflake_sql_api/` (clean separation, `py.typed`):
 | `pagination.py` | Multi-partition result fetching (the SQL API splits large results into partitions) |
 | `exports.py` | CSV/JSONL serialization for caller-owned text sinks |
 | `exceptions.py` | Typed exception hierarchy |
+| `_client_base.py` | Shared `_ClientBase`: configuration, environment loading, payloads, query hooks, and insert SQL |
 | `client.py` | Synchronous `SnowflakeClient` (query helpers, DML, batch insert, async-submit handle) |
 | `aclient.py` | Asynchronous client (same surface, `await`-based) |
 | `cli.py` | Command-line interface (`snowflake-sql-api query ...`) |
@@ -92,7 +93,9 @@ private keys, `.gitignore` excludes `*.pem` / `*.p8` / `*private_key*`.
   role, warehouse, timezone, or schema. Accept these as parameters or environment
   configuration; never hardcode them.
 - **Sync and async parity.** A feature added to the sync client should have an
-  async equivalent (or a clear reason it does not).
+  async equivalent (or a clear reason it does not). Shared non-I/O behavior lives
+  in `_ClientBase`; each client owns its transport and I/O. The public method and
+  parameter parity guard is `tests/test_client_parity.py`.
 - **Correctness over surface.** Type coercion and partition handling are
   correctness-critical, prefer well-tested core behavior to breadth.
 
