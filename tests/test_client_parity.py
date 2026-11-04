@@ -32,6 +32,7 @@ def test_client_public_method_parity() -> None:
                         )
                     )
                 parameters.append(parameter)
+            assert normalized not in public, f"duplicate method name: {normalized}"
             public[normalized] = parameters
         methods.append(public)
 
