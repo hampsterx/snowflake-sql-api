@@ -69,6 +69,15 @@ def test_live_smoke_requires_dml_one(smoke_tree, monkeypatch, value):
     assert "SNOWFLAKE_LIVE_DML=1" in result.stderr
 
 
+@pytest.mark.parametrize("missing", REQUIRED)
+def test_live_smoke_rejects_blank_values(smoke_tree, monkeypatch, missing):
+    monkeypatch.setenv(missing, "   ")
+    result = run_smoke(smoke_tree)
+    assert result.returncode == 2
+    assert missing in result.stderr
+    assert "test session starts" not in result.stdout
+
+
 def test_live_smoke_refuses_ambient_selection(smoke_tree, monkeypatch):
     monkeypatch.setenv("PYTEST_ADDOPTS", "-k nothing")
     result = run_smoke(smoke_tree)
