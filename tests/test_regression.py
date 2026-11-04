@@ -416,6 +416,43 @@ async def test_regression_async_task_cancel_bounds_a_hanging_cancel(
     assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"]
 
 
+async def test_regression_async_task_cancel_bounds_a_cancel_whose_cleanup_stalls(
+    private_key_pem: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound holds even when cancelling the cancel request does not finish.
+
+    ``asyncio.wait_for`` waits for the operation it cancels, so a request whose
+    cancellation cleanup stalls (a response close that never returns) would
+    hold the ``CancelledError`` indefinitely. The deadline abandons it instead.
+    """
+    monkeypatch.setattr(aclient_module, "CANCEL_ON_TASK_CANCEL_TIMEOUT", 0.01)
+    requests: list[httpx.Request] = []
+    cleanup_entered = asyncio.Event()
+
+    async def stalled_cancel(handle: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_entered.set()
+            await asyncio.Event().wait()  # cleanup that never finishes
+
+    async with wire_client(
+        _running_async_handler(requests), private_key_pem, True
+    ) as client:
+        monkeypatch.setattr(client._transport, "cancel", stalled_cancel)
+        task = asyncio.ensure_future(client.query(SLOW_SQL))
+        await _first_poll(requests)
+        task.cancel()
+        await asyncio.wait({task}, timeout=1)
+        assert task.cancelled()
+        assert cleanup_entered.is_set()
+        abandoned = list(aclient_module._abandoned_cancels)
+        assert len(abandoned) == 1
+        abandoned[0].cancel()  # a second cancel ends the stalled cleanup
+        await asyncio.wait(abandoned, timeout=1)
+    assert not aclient_module._abandoned_cancels
+
+
 async def test_regression_async_task_cancel_survives_a_second_cancel(
     private_key_pem: bytes,
 ) -> None:

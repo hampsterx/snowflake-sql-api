@@ -57,24 +57,42 @@ __all__ = ["AsyncSnowflakeClient", "AsyncQueryHandle"]
 CANCEL_ON_TASK_CANCEL_TIMEOUT = 5.0
 
 
+# Cancel requests abandoned at the deadline but not yet finished. The event
+# loop holds only weak references to tasks, so these keep each one alive until
+# its own cancellation completes.
+_abandoned_cancels: set[asyncio.Task[Any]] = set()
+
+
+def _settle_cancel(task: asyncio.Task[Any]) -> None:
+    _abandoned_cancels.discard(task)
+    if not task.cancelled():
+        task.exception()  # retrieved: a failed best-effort cancel is not reported
+
+
 async def _cancel_after_task_cancel(transport: AsyncTransport, handle: str) -> None:
     """Best-effort cancel of ``handle`` while a ``CancelledError`` propagates.
 
-    The request runs in its own task, bounded by
-    :data:`CANCEL_ON_TASK_CANCEL_TIMEOUT`. ``asyncio.wait`` does not cancel it,
-    and a further cancellation of the waiting task is absorbed until it
-    finishes: returning early would let the caller close the HTTP client the
-    request (or its retry) still needs. Every failure is swallowed, since the
-    caller re-raises the original ``CancelledError``.
+    The request runs in its own task, so ``asyncio.wait`` neither cancels it
+    nor is held up by it. A further cancellation of the waiting task is
+    absorbed until the request finishes, since returning early would let the
+    caller close the HTTP client the request (or its retry) still needs. The
+    whole wait is bounded by :data:`CANCEL_ON_TASK_CANCEL_TIMEOUT`: past it the
+    request is cancelled and abandoned without waiting for its cleanup, which
+    can itself stall. Every failure is swallowed, since the caller re-raises
+    the original ``CancelledError``.
     """
-    task = asyncio.ensure_future(
-        asyncio.wait_for(transport.cancel(handle), CANCEL_ON_TASK_CANCEL_TIMEOUT)
-    )
+    task = asyncio.ensure_future(transport.cancel(handle))
+    task.add_done_callback(_settle_cancel)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CANCEL_ON_TASK_CANCEL_TIMEOUT
     while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            _abandoned_cancels.add(task)
+            task.cancel()
+            return
         with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.wait({task})
-    if not task.cancelled():
-        task.exception()  # retrieved: a failed best-effort cancel is not reported
+            await asyncio.wait({task}, timeout=remaining)
 
 
 class AsyncQueryHandle:
