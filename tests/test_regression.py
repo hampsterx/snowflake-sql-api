@@ -172,6 +172,8 @@ def _cancels(requests: list[httpx.Request]) -> list[str]:
 async def _run_owned(client, async_mode: bool, method: str) -> None:
     if method == "stream":
         await collect(client.query_stream(SLOW_SQL), async_mode)
+    elif method == "insert_batches":
+        await call(client, async_mode, method, '"T"', ["ID"], [[1]])
     else:
         await call(client, async_mode, method, SLOW_SQL)
 
@@ -353,7 +355,7 @@ def _running_async_handler(requests: list[httpx.Request], on_cancel: Any = None)
     return handler
 
 
-@pytest.mark.parametrize("method", ["query", "execute", "stream"])
+@pytest.mark.parametrize("method", ["query", "execute", "stream", "insert_batches"])
 async def test_regression_async_task_cancel_cancels_owned_statement(
     method: str, private_key_pem: bytes
 ) -> None:
@@ -407,8 +409,10 @@ async def test_regression_async_task_cancel_bounds_a_hanging_cancel(
         task = asyncio.ensure_future(client.query(SLOW_SQL))
         await _first_poll(requests)
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 1)
+        # asyncio.wait, not wait_for: wait_for would cancel the task again on
+        # expiry and then wait for a cleanup that absorbs cancels, hanging.
+        await asyncio.wait({task}, timeout=1)
+        assert task.cancelled()
     assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"]
 
 
@@ -446,8 +450,10 @@ async def test_regression_async_task_cancel_survives_a_second_cancel(
         await asyncio.sleep(0)
     assert not task.done()
     release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, 1)
+    # asyncio.wait, not wait_for: wait_for would cancel the task again on
+    # expiry and then wait for a cleanup that absorbs cancels, hanging.
+    await asyncio.wait({task}, timeout=1)
+    assert task.cancelled()
     assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"] * 2
 
 
@@ -475,8 +481,10 @@ async def test_regression_async_task_cancel_during_timeout_cancel_resends(
         task = asyncio.ensure_future(client.query(SLOW_SQL))
         await _until(lambda: _cancels(requests), "the timeout's cancel request")
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 1)
+        # asyncio.wait, not wait_for: wait_for would cancel the task again on
+        # expiry and then wait for a cleanup that absorbs cancels, hanging.
+        await asyncio.wait({task}, timeout=1)
+        assert task.cancelled()
     assert _cancels(requests) == ["/api/v2/statements/slow-h/cancel"] * 2
 
 
