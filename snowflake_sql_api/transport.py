@@ -67,6 +67,19 @@ class StatementResponse:
         """Latest known handle, including a previous attempt of this submission."""
         return self.body.get("statementHandle") or self._submission_handle
 
+    @property
+    def statement_handles(self) -> Optional[tuple[str, ...]]:
+        """Structured child handles, or None when absent or malformed."""
+        return _statement_handles(self.body.get("statementHandles"))
+
+
+def _statement_handles(value: object) -> Optional[tuple[str, ...]]:
+    if isinstance(value, list) and all(
+        isinstance(handle, str) and handle.strip() for handle in value
+    ):
+        return tuple(value)
+    return None
+
 
 def _json_body(response: httpx.Response) -> Dict[str, Any]:
     try:
@@ -92,6 +105,7 @@ def _interpret(response: httpx.Response) -> StatementResponse:
             code=body.get("code"),
             sql_state=body.get("sqlState"),
             statement_handle=body.get("statementHandle"),
+            statement_handles=_statement_handles(body.get("statementHandles")),
         )
     if status == 401:
         raise SnowflakeAuthError(

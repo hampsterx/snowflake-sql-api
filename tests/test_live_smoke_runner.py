@@ -20,7 +20,12 @@ REQUIRED = (
     "SNOWFLAKE_WAREHOUSE",
     "SNOWFLAKE_LIVE_DML",
 )
-FILES = ("test_smoke.py", "test_submissions.py", "test_identifier_case.py")
+FILES = (
+    "test_smoke.py",
+    "test_submissions.py",
+    "test_identifier_case.py",
+    "test_multi_statement.py",
+)
 
 
 @pytest.fixture
@@ -89,7 +94,7 @@ def test_live_smoke_all_pass(smoke_tree):
     (smoke_tree / "pytest.ini").write_text("[pytest]\naddopts = -k nothing\n")
     result = run_smoke(smoke_tree)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "3 passed" in result.stdout
+    assert "4 passed" in result.stdout
 
 
 @pytest.mark.parametrize("name", FILES)

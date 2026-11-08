@@ -12,7 +12,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_FILES = tuple(
     ROOT / "tests" / "smoke" / name
-    for name in ("test_smoke.py", "test_submissions.py", "test_identifier_case.py")
+    for name in (
+        "test_smoke.py",
+        "test_submissions.py",
+        "test_identifier_case.py",
+        "test_multi_statement.py",
+    )
 )
 REQUIRED = (
     "SNOWFLAKE_ACCOUNT",
@@ -53,7 +58,7 @@ class CompleteSmoke:
             or not self.selected
             or self.passed != self.selected
         ):
-            print("Live smoke incomplete: every probe in all three files must pass.")
+            print("Live smoke incomplete: every probe in all required files must pass.")
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 

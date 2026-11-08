@@ -160,3 +160,28 @@ client = SnowflakeClient(
 fake.submitted_statements   # list of SQL strings submitted, in order
 fake.requests               # every httpx.Request the fake handled
 ```
+
+## Multi-statement fixtures
+
+Register each successful individual result first, then compose them:
+
+```python
+fake = FakeSnowflake()
+fake.register("SELECT 1 AS n", [{"N": 1}], partitions=1)
+fake.register_dml("DELETE FROM events", 2)
+fake.register_multi(["SELECT 1 AS n", "DELETE FROM events"])
+
+with make_client(fake) as client:
+    result = client.execute_statements(["SELECT 1 AS n", "DELETE FROM events"])
+    assert result.results[0].rows == [{"N": 1}]
+```
+
+`register_multi()` returns the fake for chaining and uses the client's exact
+newline/delimiter convention. Multiple entries produce a parent response with
+ordered child handles and independent GET/partition fixtures. One entry retains
+the ordinary single-result shape. The fake checks the explicit count and absence
+of bindings. It does not interpret SQL or prove transaction rollback. An
+explicit `register_error("\n;\n".join(statements), "failure")` registers a
+parent failure instead. Async clients use the same fixtures. For transaction
+request-shape tests, register BEGIN, each body statement, and COMMIT separately,
+then compose that full sequence.

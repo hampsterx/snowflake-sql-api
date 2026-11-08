@@ -63,15 +63,18 @@ Set these variables in your shell before running the gate:
 - `tests/smoke/test_submissions.py`: the same credentials,
   `SNOWFLAKE_LIVE_DML=1`, and explicit `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`,
   `SNOWFLAKE_WAREHOUSE` for the disposable namespace.
-- `tests/smoke/test_identifier_case.py`: the same requirements as
-  `test_submissions.py`.
+- `tests/smoke/test_identifier_case.py` and
+  `tests/smoke/test_multi_statement.py`: the same requirements as
+  `test_submissions.py`. The multi-statement probes also require `CREATE TABLE`
+  for disposable transient and temporary tables, and verify transaction rollback,
+  lock release, and batch replay observations.
 
 The combined gate requires all six named credential/namespace variables, plus
-`SNOWFLAKE_LIVE_DML=1`, even if the user has defaults. All three files' opt-in
+`SNOWFLAKE_LIVE_DML=1`, even if the user has defaults. All four files' opt-in
 checks require the key path. `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`, `SNOWFLAKE_ROLE`
 and `SNOWFLAKE_HOST` are optional for every file. Only `test_smoke.py` uses
 `from_env()`: it also accepts `SNOWFLAKE_PRIVATE_KEY` (inline PEM, taking precedence
-over the path); the two writing files read the key from the path directly. Use
+over the path); the three writing files read the key from the path directly. Use
 credentials for the intended test identity and keep keys out of git.
 
 From a checkout with the development dependencies installed, run:
@@ -80,10 +83,10 @@ From a checkout with the development dependencies installed, run:
 python scripts/live_smoke.py
 ```
 
-The runner locates all three files relative to its checkout and refuses missing
+The runner locates all four files relative to its checkout and refuses missing
 variables or a nonempty `PYTEST_ADDOPTS` before starting pytest. It clears pytest's
 configured `addopts` and accepts no test-selection arguments. Success means exit
-code 0 with every collected probe passing in all three files, including the sync
+code 0 with every collected probe passing in all four files, including the sync
 and async cases. A skip during collection, setup or execution, an expected failure
 (or unexpected pass), a deselected test, or a file with no collected probes makes
 the gate fail. Test and collection failures also remain failures. Resolve the

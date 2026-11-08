@@ -339,3 +339,46 @@ async def test_fixtures_async(
 ) -> None:
     fake_snowflake.register("SELECT 2", [{"N": 2}])
     assert await async_snowflake_client.query_scalar("SELECT 2") == 2
+
+
+@pytest.mark.asyncio
+async def test_multi_fixture_composes_select_and_dml(async_mode):
+    from .streaming_support import call, fake_client
+
+    fake = FakeSnowflake().register("SELECT 1", [{"N": 1}])
+    fake.register_dml("DELETE FROM events", 2)
+    fake.register_multi(["SELECT 1", "DELETE FROM events"])
+    async with fake_client(fake, async_mode) as client:
+        result = await call(
+            client, async_mode, "execute_statements", ["SELECT 1", "DELETE FROM events"]
+        )
+    assert result.results[0].rows == [{"N": 1}]
+    assert result.results[1].rows == [{"number of rows affected": 2}]
+
+
+@pytest.mark.parametrize("kind", ["missing", "error", "nested"])
+def test_multi_fixture_requires_individual_successful_registrations(kind):
+    fake = FakeSnowflake()
+    if kind == "error":
+        fake.register_error("SELECT 1", "expected")
+    if kind == "nested":
+        fake.register("SELECT 1", []).register("SELECT 2", [])
+        fake.register_multi(["SELECT 1", "SELECT 2"])
+    sql = "SELECT 1\n;\nSELECT 2" if kind == "nested" else "SELECT 1"
+    with pytest.raises(FakeSnowflakeError, match="individual successful"):
+        fake.register_multi([sql])
+
+
+def test_multi_fixture_rejects_missing_count_and_bindings():
+    import httpx
+
+    fake = FakeSnowflake().register("SELECT 1", []).register("SELECT 2", [])
+    fake.register_multi(["SELECT 1", "SELECT 2"])
+    for extra in ({}, {"parameters": {"MULTI_STATEMENT_COUNT": "2"}, "bindings": {}}):
+        request = httpx.Request(
+            "POST",
+            "https://example.test/api/v2/statements",
+            json={"statement": "SELECT 1\n;\nSELECT 2", **extra},
+        )
+        with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
+            fake.handle(request)
