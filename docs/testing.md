@@ -183,8 +183,9 @@ the ordinary single-result shape. The fake checks the explicit count and absence
 of bindings. It does not interpret SQL or prove transaction rollback. An
 explicit `register_error("\n;\n".join(statements), "failure")` registers a
 parent failure instead. Async clients use the same fixtures. For transaction
-request-shape tests, register BEGIN, each body statement, and COMMIT separately,
-then compose that full sequence.
+fixtures, register `ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE`,
+`BEGIN TRANSACTION`, each body statement, and `COMMIT` separately, then compose
+that full sequence. The count is `len(body) + 3`; body results start at index 2.
 
 A one-entry `register_multi([sql])` replaces the individual fixture at that exact
 SQL key. It requires an explicit count even though the real server defaults an
