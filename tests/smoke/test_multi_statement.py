@@ -118,7 +118,9 @@ async def test_transaction_commit_and_rollback_release_locks(
             client.query("SHOW PARAMETERS LIKE 'AUTOCOMMIT' IN SESSION")
         )
         record_property("autocommit", json.dumps(settings, default=str))
-        assert len(settings) == 1 and settings[0]["value"].lower() == "true"
+        assert (
+            len(settings) == 1 and settings[0]["value"].lower() == "true"
+        ), "probe requires default AUTOCOMMIT=TRUE"
         successful = await value(
             client.execute_transaction(
                 [
@@ -139,12 +141,12 @@ async def test_transaction_commit_and_rollback_release_locks(
         ]
         with pytest.raises(SnowflakeMultiStatementError) as caught:
             await value(client.execute_transaction(failing_body))
-        assert caught.value.status_code == 422
-        assert "division by zero" in str(caught.value).lower()
         record_property("transaction_failure_code", caught.value.code)
         record_property("transaction_failure_sql_state", caught.value.sql_state)
         record_property("transaction_parent", caught.value.statement_handle)
         record_property("transaction_request_id", caught.value.request_id)
+        assert caught.value.status_code == 422
+        assert "division by zero" in str(caught.value).lower()
         assert observer.query(f"SELECT ID, AMOUNT FROM {table} ORDER BY ID") == [
             {"ID": 0, "AMOUNT": 10},
             {"ID": 1, "AMOUNT": 20},
@@ -157,18 +159,19 @@ async def test_transaction_commit_and_rollback_release_locks(
             "TRANSACTION_ID FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_USER("
             "END_TIME_RANGE_START => DATEADD('minute', -15, CURRENT_TIMESTAMP()), "
             "RESULT_LIMIT => 10000, INCLUDE_CLIENT_GENERATED_STATEMENT => TRUE)) "
-            "WHERE RTRIM(QUERY_TEXT, '; \\n\\r\\t') IN (?, ?, ?)",
+            "WHERE TRIM(QUERY_TEXT, '; \\n\\r\\t') IN (?, ?, ?)",
             failing_body,
         )
         record_property("transaction_body_history", json.dumps(history, default=str))
         assert len(history) == 3, "require all body statements in recent query history"
-        by_sql = {row["QUERY_TEXT"].rstrip("; \n\r\t"): row for row in history}
+        by_sql = {row["QUERY_TEXT"].strip("; \n\r\t"): row for row in history}
         assert set(by_sql) == set(failing_body)
         assert all(
-            by_sql[sql]["EXECUTION_STATUS"] == "success" for sql in failing_body[:2]
+            by_sql[sql]["EXECUTION_STATUS"].lower() == "success"
+            for sql in failing_body[:2]
         ), "the prefix must execute before the intended failure"
         failed = by_sql[failing_body[2]]
-        assert failed["EXECUTION_STATUS"] == "failed_with_error"
+        assert failed["EXECUTION_STATUS"].lower() == "failed_with_error"
         assert "division by zero" in (failed["ERROR_MESSAGE"] or "").lower()
         assert failed["TRANSACTION_ID"] not in (None, 0, "0")
         assert all(row["TRANSACTION_ID"] == failed["TRANSACTION_ID"] for row in history)

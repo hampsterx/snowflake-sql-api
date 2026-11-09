@@ -14,10 +14,18 @@ from .smoke import test_multi_statement as smoke
 @pytest.mark.regression
 @pytest.mark.parametrize(
     "fault",
-    [None, "early rejection", "missing prefix", "failed prefix", "other transaction"],
+    [
+        None,
+        "early rejection",
+        "non-422",
+        "missing prefix",
+        "failed prefix",
+        "other transaction",
+    ],
 )
+@pytest.mark.parametrize("formatted_history", [False, True])
 async def test_regression_rollback_probe_requires_execution_evidence(
-    monkeypatch, async_mode, fault
+    monkeypatch, async_mode, fault, formatted_history
 ):
     statements = []
     observations = {}
@@ -44,7 +52,8 @@ async def test_regression_rollback_probe_requires_execution_evidence(
                 expected_count=5,
                 phase="execution",
                 outcome="failed",
-                status_code=422,
+                status_code=400 if fault == "non-422" else 422,
+                request_id="diagnostic-id",
             )
 
     class Observer:
@@ -69,6 +78,10 @@ async def test_regression_rollback_probe_requires_execution_evidence(
                 history[0]["EXECUTION_STATUS"] = "failed_with_error"
             if fault == "other transaction":
                 history[0]["TRANSACTION_ID"] = 43
+            if formatted_history:
+                for row in history:
+                    row["QUERY_TEXT"] = "\n " + row["QUERY_TEXT"] + ";\r\n"
+                    row["EXECUTION_STATUS"] = row["EXECUTION_STATUS"].upper()
             return history
 
         def execute(self, sql):
@@ -95,3 +108,4 @@ async def test_regression_rollback_probe_requires_execution_evidence(
                 {}, ('"SYNTHETIC"', Observer()), async_mode, observations.__setitem__
             )
         assert "rollback_and_lock_release" not in observations
+        assert observations["transaction_request_id"] == "diagnostic-id"

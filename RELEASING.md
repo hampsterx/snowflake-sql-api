@@ -24,7 +24,8 @@ git fetch origin
 git switch master && git pull --ff-only
 
 # after configuring the disposable namespace described below
-python scripts/live_smoke.py --junitxml=/tmp/snowflake-live-results.xml
+smoke_evidence_dir="$(mktemp -d "$HOME/snowflake-smoke.XXXXXXXX")"
+python scripts/live_smoke.py --junitxml="$smoke_evidence_dir/results.xml"
 # continue only if the gate exits 0; tag the same commit that passed
 git tag v0.1.0
 git push origin v0.1.0
@@ -80,7 +81,8 @@ credentials for the intended test identity and keep keys out of git.
 From a checkout with the development dependencies installed, run:
 
 ```bash
-python scripts/live_smoke.py --junitxml=/tmp/snowflake-live-results.xml
+smoke_evidence_dir="$(mktemp -d "$HOME/snowflake-smoke.XXXXXXXX")"
+python scripts/live_smoke.py --junitxml="$smoke_evidence_dir/results.xml"
 ```
 
 The runner locates all four files relative to its checkout and refuses missing
@@ -97,7 +99,9 @@ does not retain partial-failure replay counts or transaction history. The rollba
 probe requires both earlier writes to succeed in the same transaction before the
 intended divide-by-zero failure, plus an independent lock probe. Missing recent
 history fails rather than establishing rollback. It also records the effective
-AUTOCOMMIT observation; do not change account settings to make a probe pass.
+AUTOCOMMIT observation and requires it to be TRUE; do not change account settings
+to make a probe pass. The example creates a private directory under your home,
+which persists across reboots; preserve it with the release records.
 Replay of a partially failed ordinary batch can repeat its prefix, and the
 recorded counts remain observations, not an exactly-once assertion.
 Ordinary `pytest tests/smoke` still allows opt-in skips and does

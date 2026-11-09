@@ -129,6 +129,9 @@ after multiple POST attempts are `unknown`. A final rejection cannot erase the
 uncertainty of an earlier timeout. Attaching an existing handle does not invent
 its attempt history.
 
+An allocated UUID can also accompany a local signing failure with zero POST
+attempts. There is then no accepted request to look up at Snowflake.
+
 After validated parent success, a child download error is `result_fetch` with
 `succeeded` execution, even if a previous POST attempt was ambiguous. That
 observation does not establish exactly-once effects. Recover results using the
@@ -216,8 +219,9 @@ disposable Snowflake namespace. They are not established by mocked HTTP 422
 responses. An unknown outcome never means a rollback. Run the opt-in probes:
 
 ```bash
+smoke_evidence_dir="$(mktemp -d "$HOME/snowflake-smoke.XXXXXXXX")"
 SNOWFLAKE_LIVE_DML=1 python -m pytest tests/smoke/test_multi_statement.py -v \
-    -o junit_family=legacy --junitxml=/tmp/multi-statement-results.xml
+    -o junit_family=legacy --junitxml="$smoke_evidence_dir/results.xml"
 ```
 
 The probes additionally require credentials plus explicit `SNOWFLAKE_DATABASE`,
@@ -228,7 +232,7 @@ probe requires the intended divide-by-zero failure and query-history evidence
 that both preceding writes succeeded within the same transaction. Missing history
 fails the probe, including when the last 10,000 queries in its 15-minute search
 window omit the needed statements. It records the observed AUTOCOMMIT setting
-without changing it. They also
+and requires it to be TRUE without changing it. They also
 discard a real successful response before retrying a completed parent, and
 record prefix-row counts when replaying a partially failed ordinary batch.
 Skipped probes leave these properties unverified. Keep account configuration and
