@@ -75,7 +75,9 @@ statements or exclude a race with later statements.
 
 `result(poll=False)` raises `ResultNotReady` with the relevant parent or child
 handle on HTTP 202. `result(timeout=...)` shares one polling budget across the
-parent and all children. Its default is 600 seconds. HTTP calls and their retries
+parent and all children. `ResultNotReady` carries no partial-result prefix;
+call `result()` again to collect the complete ordered results. The polling
+budget's default is 600 seconds. HTTP calls and their retries
 retain their own transport timeouts, so this is not a hard wall-clock limit.
 A caller-owned handle is left running on a polling timeout. Synchronous-style
 `execute_statements()` and `execute_transaction()` ask to cancel a parent they
@@ -140,6 +142,8 @@ with SnowflakeClient(
 That policy also disables automatic GET retries. Neither result retrieval nor
 GET retries can cause a parent POST. The new APIs do not expose caller-owned
 submission UUIDs or durable batch replay.
+They also do not expose the generated submission UUID for diagnostic correlation;
+persist the parent handle as soon as it is available.
 
 ## Constrained transaction helper
 

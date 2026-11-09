@@ -369,16 +369,22 @@ def test_multi_fixture_requires_individual_successful_registrations(kind):
         fake.register_multi([sql])
 
 
-def test_multi_fixture_rejects_missing_count_and_bindings():
+@pytest.mark.regression
+@pytest.mark.parametrize("count", [1, 2])
+def test_regression_multi_fixture_requires_count_and_rejects_bindings(count):
     import httpx
 
     fake = FakeSnowflake().register("SELECT 1", []).register("SELECT 2", [])
-    fake.register_multi(["SELECT 1", "SELECT 2"])
-    for extra in ({}, {"parameters": {"MULTI_STATEMENT_COUNT": "2"}, "bindings": {}}):
+    entries = ["SELECT 1", "SELECT 2"][:count]
+    fake.register_multi(entries)
+    for extra in (
+        {},
+        {"parameters": {"MULTI_STATEMENT_COUNT": str(count)}, "bindings": {}},
+    ):
         request = httpx.Request(
             "POST",
             "https://example.test/api/v2/statements",
-            json={"statement": "SELECT 1\n;\nSELECT 2", **extra},
+            json={"statement": "\n;\n".join(entries), **extra},
         )
         with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
             fake.handle(request)

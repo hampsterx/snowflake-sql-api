@@ -38,7 +38,7 @@ when the package is installed; no ``conftest.py`` wiring is required.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import (
@@ -265,6 +265,7 @@ class _Reg:
     stats: Optional[Dict[str, int]] = None
     error: Optional[_Error] = None
     children: Optional[Tuple[_Reg, ...]] = None
+    statement_count: Optional[int] = None
 
 
 @dataclass
@@ -419,9 +420,14 @@ class FakeSnowflake:
                 )
             children.append(reg)
         self._exact["\n;\n".join(entries)] = (
-            children[0]
+            replace(children[0], statement_count=1)
             if len(children) == 1
-            else _Reg(row_type=[], chunks=[[]], children=tuple(children))
+            else _Reg(
+                row_type=[],
+                chunks=[[]],
+                children=tuple(children),
+                statement_count=len(children),
+            )
         )
         return self
 
@@ -523,6 +529,14 @@ class FakeSnowflake:
         reg = self._lookup(sql)
         if reg is None:
             raise FakeSnowflakeError(f"no result registered for statement: {sql!r}")
+        if reg.statement_count is not None and (
+            payload.get("parameters", {}).get("MULTI_STATEMENT_COUNT")
+            != str(reg.statement_count)
+            or "bindings" in payload
+        ):
+            raise FakeSnowflakeError(
+                "multi fixture requires exact MULTI_STATEMENT_COUNT and no bindings"
+            )
         handle = self._next_handle()
         if reg.error is not None:
             err = reg.error
@@ -537,14 +551,6 @@ class FakeSnowflake:
             )
         self._state[handle] = _State(reg=reg, remaining_polls=reg.polls_before_ready)
         if reg.children is not None:
-            if (
-                payload.get("parameters", {}).get("MULTI_STATEMENT_COUNT")
-                != str(len(reg.children))
-                or "bindings" in payload
-            ):
-                raise FakeSnowflakeError(
-                    "multi fixture requires exact MULTI_STATEMENT_COUNT and no bindings"
-                )
             child_handles = []
             for child in reg.children:
                 child_handle = self._next_handle()
