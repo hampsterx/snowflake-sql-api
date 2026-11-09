@@ -374,23 +374,32 @@ def test_multi_fixture_requires_individual_successful_registrations(kind):
 
 @pytest.mark.regression
 @pytest.mark.parametrize("count", [1, 2])
-def test_regression_multi_fixture_requires_count_and_rejects_bindings(count):
+@pytest.mark.parametrize(
+    "case", ["missing", "different", "variable", "integer", "bindings"]
+)
+def test_regression_multi_fixture_requires_count_and_rejects_bindings(count, case):
     import httpx
 
     fake = FakeSnowflake().register("SELECT 1", []).register("SELECT 2", [])
     entries = ["SELECT 1", "SELECT 2"][:count]
     fake.register_multi(entries)
-    for extra in (
-        {},
-        {"parameters": {"MULTI_STATEMENT_COUNT": str(count)}, "bindings": {}},
-    ):
-        request = httpx.Request(
-            "POST",
-            "https://example.test/api/v2/statements",
-            json={"statement": "\n;\n".join(entries), **extra},
-        )
-        with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
-            fake.handle(request)
+    extra = {
+        "missing": {},
+        "different": {"parameters": {"MULTI_STATEMENT_COUNT": str(count + 1)}},
+        "variable": {"parameters": {"MULTI_STATEMENT_COUNT": "0"}},
+        "integer": {"parameters": {"MULTI_STATEMENT_COUNT": count}},
+        "bindings": {
+            "parameters": {"MULTI_STATEMENT_COUNT": str(count)},
+            "bindings": {},
+        },
+    }[case]
+    request = httpx.Request(
+        "POST",
+        "https://example.test/api/v2/statements",
+        json={"statement": "\n;\n".join(entries), **extra},
+    )
+    with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
+        fake.handle(request)
 
 
 @pytest.mark.asyncio
