@@ -24,7 +24,7 @@ git fetch origin
 git switch master && git pull --ff-only
 
 # after configuring the disposable namespace described below
-python scripts/live_smoke.py
+python scripts/live_smoke.py --junitxml=/tmp/snowflake-live-results.xml
 # continue only if the gate exits 0; tag the same commit that passed
 git tag v0.1.0
 git push origin v0.1.0
@@ -80,7 +80,7 @@ credentials for the intended test identity and keep keys out of git.
 From a checkout with the development dependencies installed, run:
 
 ```bash
-python scripts/live_smoke.py
+python scripts/live_smoke.py --junitxml=/tmp/snowflake-live-results.xml
 ```
 
 The runner locates all four files relative to its checkout and refuses missing
@@ -91,7 +91,16 @@ and async cases. A skip during collection, setup or execution, an expected failu
 (or unexpected pass), a deselected test, or a file with no collected probes makes
 the gate fail. Test and collection failures also remain failures. Resolve the
 reported issue and rerun the whole gate before tagging; retain its output with the
-release evidence. Ordinary `pytest tests/smoke` still allows opt-in skips and does
+release evidence. The optional `--junitxml` writes probe properties using pytest's
+legacy JUnit format. Retain and review that XML privately: console success alone
+does not retain partial-failure replay counts or transaction history. The rollback
+probe requires both earlier writes to succeed in the same transaction before the
+intended divide-by-zero failure, plus an independent lock probe. Missing recent
+history fails rather than establishing rollback. It also records the effective
+AUTOCOMMIT observation; do not change account settings to make a probe pass.
+Replay of a partially failed ordinary batch can repeat its prefix, and the
+recorded counts remain observations, not an exactly-once assertion.
+Ordinary `pytest tests/smoke` still allows opt-in skips and does
 not enforce this release gate.
 
 ## One-time prerequisites

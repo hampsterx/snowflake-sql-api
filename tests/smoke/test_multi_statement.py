@@ -114,6 +114,11 @@ async def test_transaction_commit_and_rollback_release_locks(
 ):
     table, observer = multi_table
     async with multi_client(multi_options, async_mode) as client:
+        settings = await value(
+            client.query("SHOW PARAMETERS LIKE 'AUTOCOMMIT' IN SESSION")
+        )
+        record_property("autocommit", json.dumps(settings, default=str))
+        assert len(settings) == 1 and settings[0]["value"].lower() == "true"
         successful = await value(
             client.execute_transaction(
                 [
@@ -127,25 +132,46 @@ async def test_transaction_commit_and_rollback_release_locks(
             {"ID": 0, "AMOUNT": 10},
             {"ID": 1, "AMOUNT": 20},
         ]
+        failing_body = [
+            f"UPDATE {table} SET AMOUNT=99 WHERE ID=0",
+            f"INSERT INTO {table} VALUES (2, 30)",
+            f"UPDATE {table} SET AMOUNT=1/ID WHERE ID=0",
+        ]
         with pytest.raises(SnowflakeMultiStatementError) as caught:
-            await value(
-                client.execute_transaction(
-                    [
-                        f"UPDATE {table} SET AMOUNT=99 WHERE ID=0",
-                        f"INSERT INTO {table} VALUES (2, 30)",
-                        f"UPDATE {table} SET AMOUNT=1/ID WHERE ID=0",
-                    ]
-                )
-            )
+            await value(client.execute_transaction(failing_body))
         assert caught.value.status_code == 422
+        assert "division by zero" in str(caught.value).lower()
         record_property("transaction_failure_code", caught.value.code)
+        record_property("transaction_failure_sql_state", caught.value.sql_state)
+        record_property("transaction_parent", caught.value.statement_handle)
+        record_property("transaction_request_id", caught.value.request_id)
         assert observer.query(f"SELECT ID, AMOUNT FROM {table} ORDER BY ID") == [
             {"ID": 0, "AMOUNT": 10},
             {"ID": 1, "AMOUNT": 20},
         ]
-        # A separate request with a 15-second server/client timeout detects retained locks.
+        # Separate request: 15-second server/poll budget, independent HTTP timeout.
         observer.execute(f"UPDATE {table} SET AMOUNT=11 WHERE ID=0")
         assert observer.query_scalar(f"SELECT AMOUNT FROM {table} WHERE ID=0") == 11
+        history = observer.query(
+            "SELECT QUERY_ID, QUERY_TEXT, EXECUTION_STATUS, ERROR_CODE, ERROR_MESSAGE, "
+            "TRANSACTION_ID FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_USER("
+            "END_TIME_RANGE_START => DATEADD('minute', -15, CURRENT_TIMESTAMP()), "
+            "RESULT_LIMIT => 10000, INCLUDE_CLIENT_GENERATED_STATEMENT => TRUE)) "
+            "WHERE RTRIM(QUERY_TEXT, '; \\n\\r\\t') IN (?, ?, ?)",
+            failing_body,
+        )
+        record_property("transaction_body_history", json.dumps(history, default=str))
+        assert len(history) == 3, "require all body statements in recent query history"
+        by_sql = {row["QUERY_TEXT"].rstrip("; \n\r\t"): row for row in history}
+        assert set(by_sql) == set(failing_body)
+        assert all(
+            by_sql[sql]["EXECUTION_STATUS"] == "success" for sql in failing_body[:2]
+        ), "the prefix must execute before the intended failure"
+        failed = by_sql[failing_body[2]]
+        assert failed["EXECUTION_STATUS"] == "failed_with_error"
+        assert "division by zero" in (failed["ERROR_MESSAGE"] or "").lower()
+        assert failed["TRANSACTION_ID"] not in (None, 0, "0")
+        assert all(row["TRANSACTION_ID"] == failed["TRANSACTION_ID"] for row in history)
         record_property("rollback_and_lock_release", "verified by independent requests")
 
 

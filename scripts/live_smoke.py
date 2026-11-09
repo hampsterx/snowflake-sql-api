@@ -63,7 +63,11 @@ class CompleteSmoke:
 
 
 def main() -> int:
-    argparse.ArgumentParser(description=__doc__).parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--junitxml", type=Path, help="write private probe observations to JUnit XML"
+    )
+    options = parser.parse_args()
     missing = [name for name in REQUIRED if not os.environ.get(name, "").strip()]
     if os.environ.get("SNOWFLAKE_LIVE_DML") != "1":
         missing.append("SNOWFLAKE_LIVE_DML=1")
@@ -73,9 +77,22 @@ def main() -> int:
     if os.environ.get("PYTEST_ADDOPTS", "").strip():
         print("Unset PYTEST_ADDOPTS to run the complete live smoke.", file=sys.stderr)
         return 2
+    evidence = (
+        ["-o", "junit_family=legacy", f"--junitxml={options.junitxml.resolve()}"]
+        if options.junitxml is not None
+        else []
+    )
     return int(
         pytest.main(
-            ["-o", "addopts=", "--strict-markers", "-v", "-rs", *map(str, SMOKE_FILES)],
+            [
+                "-o",
+                "addopts=",
+                "--strict-markers",
+                "-v",
+                "-rs",
+                *evidence,
+                *map(str, SMOKE_FILES),
+            ],
             plugins=[CompleteSmoke()],
         )
     )
