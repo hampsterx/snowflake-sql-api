@@ -113,6 +113,7 @@ class SnowflakeMultiStatementError(SnowflakeError):
         phase: MultiStatementPhase,
         outcome: MultiStatementOutcome,
         submission_attempts: Optional[int] = None,
+        request_id: Optional[str] = None,
         status_code: Optional[int] = None,
         code: Optional[str] = None,
         sql_state: Optional[str] = None,
@@ -125,6 +126,7 @@ class SnowflakeMultiStatementError(SnowflakeError):
         self.failed_index = failed_index
         self.phase = phase
         self.outcome = outcome
+        self.request_id = request_id
         self.status_code = status_code
         self.code = code
         self.sql_state = sql_state

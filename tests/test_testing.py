@@ -7,6 +7,7 @@ native<->wire round trip for every coerced type.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
@@ -20,6 +21,8 @@ from snowflake_sql_api.testing import (
     make_async_client,
     make_client,
 )
+
+from .streaming_support import call, fake_client
 
 # ---------------------------------------------------------------------------
 # Sync client through FakeSnowflake
@@ -388,3 +391,36 @@ def test_regression_multi_fixture_requires_count_and_rejects_bindings(count):
         )
         with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
             fake.handle(request)
+
+
+@pytest.mark.asyncio
+async def test_individual_fixture_reuses_ordinary_and_single_batch_calls(async_mode):
+    sql = "SELECT 1 AS n"
+    rows = [{"N": 1}, {"N": 2}]
+    fake = FakeSnowflake().register(sql, rows, partitions=2, polls_before_ready=1)
+    async with fake_client(fake, async_mode) as client:
+        assert await call(client, async_mode, "query", sql) == rows
+        assert (await call(client, async_mode, "execute_statements", [sql])).results[
+            0
+        ].rows == rows
+        handle = await call(client, async_mode, "submit_statements", [sql])
+        assert (await call(handle, async_mode, "result")).results[0].rows == rows
+    payloads = [json.loads(r.content) for r in fake.requests if r.method == "POST"]
+    assert "parameters" not in payloads[0]
+    for payload in payloads[1:]:
+        assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "1"
+        assert "bindings" not in payload
+
+
+@pytest.mark.asyncio
+async def test_strict_single_batch_fixture_replaces_individual_fixture(async_mode):
+    sql = "SELECT 1"
+    fake = FakeSnowflake().register(sql, [{"N": 1}]).register_multi([sql])
+    async with fake_client(fake, async_mode) as client:
+        with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
+            await call(client, async_mode, "query", sql)
+        assert (await call(client, async_mode, "execute_statements", [sql])).results[
+            0
+        ].rows == [{"N": 1}]
+        fake.register(sql, [{"N": 2}])
+        assert await call(client, async_mode, "query", sql) == [{"N": 2}]

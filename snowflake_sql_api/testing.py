@@ -407,7 +407,12 @@ class FakeSnowflake:
         return self
 
     def register_multi(self, statements: Sequence[str]) -> "FakeSnowflake":
-        """Compose registered fixtures into one request, without interpreting SQL."""
+        """Compose strict batch fixtures, checking explicit count and no bindings.
+
+        A one-entry composition replaces that exact individual fixture. For
+        shared ordinary/batch use, retain ``register()`` and assert the batch
+        payload in ``requests`` instead. No SQL is interpreted.
+        """
         from .multi_statement import _statements
 
         entries = _statements(statements)

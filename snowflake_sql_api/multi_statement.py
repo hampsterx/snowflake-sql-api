@@ -115,6 +115,7 @@ class _MultiStatementState:
             raise SnowflakeConfigError("expected_count must be a positive integer")
         self.statement_handle = statement_handle
         self.expected_count = expected_count
+        self.request_id: str | None = None
         self.submission_attempts: int | None = None
         self._response: StatementResponse | None = None
         self._known_handles: tuple[str, ...] = ()
@@ -168,6 +169,7 @@ class _MultiStatementState:
             phase=phase,
             outcome=outcome,
             submission_attempts=self.submission_attempts,
+            request_id=self.request_id,
             status_code=status,
             code=getattr(cause, "code", None),
             sql_state=getattr(cause, "sql_state", None),

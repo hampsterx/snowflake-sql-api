@@ -140,6 +140,10 @@ context; results stay distinct, ordered and fully partitioned. Async clients
 await the same methods. `submit_statements()` returns a parent handle that can
 be saved and attached later with `MultiStatementHandle` or
 `AsyncMultiStatementHandle`, without another POST.
+Submitted handles and `SnowflakeMultiStatementError.request_id` expose the
+original POST UUID for diagnostics. Attached handles have no known request UUID.
+For dynamic values, use a parameterized single statement or a suitable bound
+procedure call; the guide includes recipes for broader trusted SQL as well.
 
 Ordinary batches can partially commit. The transaction helper restricts its body
 to INSERT, UPDATE, DELETE, MERGE and SELECT, and sends BEGIN/body/COMMIT together.

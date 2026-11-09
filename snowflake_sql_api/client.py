@@ -603,11 +603,12 @@ class SnowflakeClient(_ClientBase):
         self, statements: Sequence[str], *, async_exec: bool
     ) -> MultiStatementHandle:
         payload, count = _multi_payload(self, statements)
-        self._notify(payload["statement"], None)
         state = _MultiStatementState("", count)
+        state.request_id = str(uuid.uuid4())
+        self._notify(payload["statement"], None)
         try:
             response = self._transport.submit(
-                payload, request_id=str(uuid.uuid4()), async_exec=async_exec
+                payload, request_id=state.request_id, async_exec=async_exec
             )
             state.submission_attempts = response.submission_attempts
             parent = response.statement_handle
@@ -616,6 +617,7 @@ class SnowflakeClient(_ClientBase):
                     "multi-statement submit returned no parent handle"
                 )
             handle = MultiStatementHandle(self, parent, expected_count=count)
+            handle.request_id = state.request_id
             handle.submission_attempts = response.submission_attempts
             handle._response = response
             return handle

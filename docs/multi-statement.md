@@ -37,8 +37,21 @@ cross-request transaction.
 
 There is no `params` argument or bindings field. Do not interpolate untrusted
 values to work around the SQL API's missing multi-statement binding support.
-Use a supported parameterized single statement instead, such as a suitable
-bound procedure call.
+Use a parameterized single statement for dynamic values:
+
+```python
+rows = client.query(
+    "WITH x AS (SELECT ? AS label) SELECT label FROM x", [label]
+)
+```
+
+For multiple dynamic steps, a caller-managed, scalar-returning procedure can
+provide a single bound call, for example
+`client.query_scalar("CALL process_event(?, ?)", [event_id, label])`.
+The procedure owns its internal binding, transaction and error handling; confirm
+its behavior in the target environment. The client does not translate batches
+into procedures. See [SQL API procedure support](https://docs.snowflake.com/en/developer-guide/sql-api/using-stored-procedures).
+For a single multi-row INSERT, the existing `insert_many()` also binds values.
 
 `MultiStatementResult.statement_handle` identifies the parent request. Its
 `results` tuple contains `StatementResult` objects in input order, with
@@ -61,6 +74,8 @@ from snowflake_sql_api import MultiStatementHandle
 handle = client.submit_statements(["SELECT 1 AS n", "SELECT 2 AS n"])
 # Persist these fields in application-owned durable storage:
 parent, count = handle.statement_handle, handle.expected_count
+# The original POST UUID is available for diagnostic correlation:
+request_id = handle.request_id
 
 # A later worker can attach without knowing or submitting the SQL:
 restored = MultiStatementHandle(client, parent, expected_count=count)
@@ -72,6 +87,10 @@ and fires no query hook. Retrieval uses only GETs, including after a failed chil
 download. `status()` checks the parent and returns `RUNNING` or `SUCCESS`;
 `cancel()` requests parent cancellation. Cancellation cannot undo committed
 statements or exclude a race with later statements.
+
+An attached handle has `request_id=None`, because it does not know the original
+submission identity. A UUID alone cannot retrieve a result; retain the parent
+handle and count for recovery.
 
 `result(poll=False)` raises `ResultNotReady` with the relevant parent or child
 handle on HTTP 202. `result(timeout=...)` shares one polling budget across the
@@ -94,6 +113,7 @@ and exposes structured `status_code`, `code`, and `sql_state` when available:
 | Field | Meaning |
 | --- | --- |
 | `statement_handle` | The known parent, or `None` if no handle reaches the client. |
+| `request_id` | The original parent POST UUID, or `None` for an attached handle. |
 | `expected_count` | The submitted count needed for later handle attachment. |
 | `known_statement_handles` | A tuple of validated child handles reported by Snowflake. |
 | `completed_results` | The ordered results actually downloaded before the fault. |
@@ -140,10 +160,13 @@ with SnowflakeClient(
 ```
 
 That policy also disables automatic GET retries. Neither result retrieval nor
-GET retries can cause a parent POST. The new APIs do not expose caller-owned
-submission UUIDs or durable batch replay.
-They also do not expose the generated submission UUID for diagnostic correlation;
-persist the parent handle as soon as it is available.
+GET retries can cause a parent POST. Handles and wrapped errors retain the
+generated parent POST UUID, including when a response is lost. This is diagnostic
+metadata, not evidence of acceptance or commit. Status/cancel errors and
+`ResultNotReady` retain their existing metadata. The new APIs do not accept
+caller-owned submission UUIDs or provide durable batch replay. Persist the
+parent handle as soon as it is available; an ID returned after submission cannot
+cover every process or task loss.
 
 ## Constrained transaction helper
 
@@ -170,6 +193,22 @@ or a security boundary for hostile input. Each entry must still be one trusted
 statement. External effects of functions are outside the helper's scope. DDL
 implicitly commits and is unsuitable for transaction rollback guarantees.
 
+For trusted broader syntax, write the transaction boundaries explicitly using
+the existing raw batch API:
+
+```python
+result = client.execute_statements([
+    "BEGIN TRANSACTION",
+    "WITH x AS (SELECT 1 AS n) SELECT n FROM x",
+    "COMMIT",
+])
+```
+
+This has the same single-request and uncertain-outcome rules. The caller owns
+the SQL's transaction effects. A leading WITH is excluded from the constrained
+helper because [Snowflake also permits anonymous procedure calls after WITH](https://docs.snowflake.com/en/sql-reference/constructs/with).
+An `INSERT INTO ... WITH ... SELECT ...` already starts with an allowed keyword.
+
 **Verification limit:** unit tests establish request construction and result/error
 handling. Live rollback, lock release, autocommit configuration, completed-parent
 replay, and partially failed replay require empirical verification in a
@@ -178,13 +217,18 @@ responses. An unknown outcome never means a rollback. Run the opt-in probes:
 
 ```bash
 SNOWFLAKE_LIVE_DML=1 python -m pytest tests/smoke/test_multi_statement.py -v \
-    --junitxml=multi-statement-results.xml
+    -o junit_family=legacy --junitxml=/tmp/multi-statement-results.xml
 ```
 
 The probes additionally require credentials plus explicit `SNOWFLAKE_DATABASE`,
 `SNOWFLAKE_SCHEMA`, and `SNOWFLAKE_WAREHOUSE`, create uniquely named disposable
 objects, and use synthetic rows. They observe successful commits, failed-body
-rollback and subsequent lock availability from independent requests. They also
+rollback and subsequent lock availability from independent requests. The rollback
+probe requires the intended divide-by-zero failure and query-history evidence
+that both preceding writes succeeded within the same transaction. Missing history
+fails the probe, including when the last 10,000 queries in its 15-minute search
+window omit the needed statements. It records the observed AUTOCOMMIT setting
+without changing it. They also
 discard a real successful response before retrying a completed parent, and
 record prefix-row counts when replaying a partially failed ordinary batch.
 Skipped probes leave these properties unverified. Keep account configuration and

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import pickle
+import uuid
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
 
@@ -178,10 +179,12 @@ async def test_submit_parent_only_attach_status_cancel_and_get_only_recovery(
         fake, async_mode, on_query=lambda *a: hooks.append(a)
     ) as client:
         original = await invoke(client, "submit_statements", ["SELECT 1", "SELECT 2"])
+        assert original.request_id == fake.requests[0].url.params["requestId"]
         assert fake.requests[0].url.params["async"] == "true"
         saved = attach(
             client, async_mode, original.statement_handle, original.expected_count
         )
+        assert saved.request_id is None
         assert len(fake.requests) == 1
         assert await invoke(saved, "status") == "SUCCESS"
         result = await invoke(saved, "result")
@@ -342,6 +345,7 @@ async def test_submission_outcome_retains_attempt_history(
             await invoke(client, "execute_statements", ["SELECT 1", "SELECT 2"])
     error = caught.value
     assert error.submission_attempts == (2 if prior_timeout else 1)
+    assert error.request_id == requests[0].url.params["requestId"]
     assert error.outcome == (
         "unknown"
         if prior_timeout or status == 404
@@ -396,6 +400,8 @@ async def test_result_fetch_failure_reports_prefix_and_never_reposts(
             await invoke(client, "execute_statements", ["SELECT 1", "SELECT 2"])
         error = caught.value
         assert error.phase == "result_fetch" and error.outcome == "succeeded"
+        assert error.request_id == requests[0].url.params["requestId"]
+        assert error.__cause__.request_id is None
         assert error.known_statement_handles == ("one", "two")
         assert error.failed_index == 1 and error.submission_attempts == 1
         assert [r.rows for r in error.completed_results] == [[{"N": 1}]]
@@ -512,7 +518,10 @@ async def test_transaction_allowed_leading_keywords(async_mode, keyword):
 async def test_missing_parent_and_local_signing_failure(
     async_mode, private_key_pem, monkeypatch, submit
 ):
+    requests = []
+
     def handler(request):
+        requests.append(request)
         return httpx.Response(202, json={"message": "no parent"})
 
     async with wire_client(handler, private_key_pem, async_mode) as client:
@@ -522,6 +531,7 @@ async def test_missing_parent_and_local_signing_failure(
         assert caught.value.statement_handle is None
         assert caught.value.outcome == "unknown"
         assert caught.value.submission_attempts == 1
+        assert caught.value.request_id == requests[0].url.params["requestId"]
 
         def fail_signing():
             raise ValueError("local signing fault")
@@ -531,6 +541,8 @@ async def test_missing_parent_and_local_signing_failure(
             await invoke(client, method, ["SELECT 1", "SELECT 2"])
         assert caught.value.outcome == "not_executed"
         assert caught.value.submission_attempts == 0
+        assert uuid.UUID(caught.value.request_id).version == 4
+        assert caught.value.request_id != requests[0].url.params["requestId"]
 
 
 @pytest.mark.asyncio
@@ -546,3 +558,104 @@ async def test_multi_has_no_binding_api_and_parent_management_keeps_error_types(
         for method in ("status", "cancel"):
             with pytest.raises(SnowflakeRequestError):
                 await invoke(attach(client, async_mode), method)
+
+
+@pytest.mark.asyncio
+@pytest.mark.regression
+@pytest.mark.parametrize(
+    "method", ["submit_statements", "execute_statements", "execute_transaction"]
+)
+@pytest.mark.parametrize("fault", ["timeout", "decode", "rejection"])
+async def test_regression_multi_errors_keep_original_request_identity(
+    async_mode, private_key_pem, method, fault
+):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if fault == "timeout":
+            raise httpx.ReadTimeout("lost response", request=request)
+        if fault == "decode":
+            return httpx.Response(200, content=b"invalid JSON")
+        return httpx.Response(422, json={"message": "failure"})
+
+    async with wire_client(
+        handler,
+        private_key_pem,
+        async_mode,
+        retry_policy=RetryPolicy(max_attempts=2, base_backoff=0),
+    ) as client:
+        with pytest.raises(SnowflakeMultiStatementError) as caught:
+            await invoke(client, method, ["SELECT 1"])
+    error = caught.value
+    assert error.request_id == requests[0].url.params["requestId"]
+    assert all(r.url.params["requestId"] == error.request_id for r in requests)
+    assert pickle.loads(pickle.dumps(error)).__dict__ == error.__dict__
+
+
+@pytest.mark.asyncio
+@pytest.mark.regression
+async def test_regression_attached_multi_error_keeps_unknown_identity(async_mode):
+    fake = FakeSnowflake()
+    async with fake_client(fake, async_mode) as client:
+        saved = attach(client, async_mode)
+        with pytest.raises(SnowflakeMultiStatementError) as caught:
+            await invoke(saved, "result")
+    assert saved.request_id is None and caught.value.request_id is None
+    assert pickle.loads(pickle.dumps(caught.value)).request_id is None
+    assert all(r.method == "GET" for r in fake.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["submit_statements", "execute_statements", "execute_transaction"]
+)
+async def test_multi_query_hook_error_still_propagates_unchanged(async_mode, method):
+    failure = RuntimeError("callback failed")
+
+    def hook(sql, params):
+        raise failure
+
+    fake = FakeSnowflake()
+    async with fake_client(fake, async_mode, on_query=hook) as client:
+        with pytest.raises(RuntimeError) as caught:
+            await invoke(client, method, ["SELECT 1"])
+    assert caught.value is failure and not hasattr(failure, "request_id")
+    assert not fake.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sql",
+    ["WITH x AS (SELECT ? AS label) SELECT label FROM x", "CALL process_event(?)"],
+)
+async def test_documented_single_statement_binding_routes(async_mode, sql):
+    label = "quote'; -- comment; /* value */"
+    fake = FakeSnowflake().register(sql, [{"LABEL": label}])
+    async with fake_client(fake, async_mode) as client:
+        assert await invoke(client, "query", sql, [label]) == [{"LABEL": label}]
+    payload = json.loads(fake.requests[0].content)
+    assert payload["statement"] == sql and label not in payload["statement"]
+    assert payload["bindings"]["1"]["value"] == label
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_documented_explicit_cte_transaction_route(async_mode):
+    statements = [
+        "BEGIN TRANSACTION",
+        "WITH x AS (SELECT 1 AS n) SELECT n FROM x",
+        "COMMIT",
+    ]
+    fake = FakeSnowflake()
+    for sql in statements:
+        fake.register(sql, [])
+    fake.register_multi(statements)
+    async with fake_client(fake, async_mode) as client:
+        await invoke(client, "execute_statements", statements)
+    posts = [r for r in fake.requests if r.method == "POST"]
+    assert len(posts) == 1
+    payload = json.loads(posts[0].content)
+    assert payload["statement"] == "\n;\n".join(statements)
+    assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "3"
+    assert "bindings" not in payload

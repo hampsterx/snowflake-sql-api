@@ -185,3 +185,32 @@ explicit `register_error("\n;\n".join(statements), "failure")` registers a
 parent failure instead. Async clients use the same fixtures. For transaction
 request-shape tests, register BEGIN, each body statement, and COMMIT separately,
 then compose that full sequence.
+
+A one-entry `register_multi([sql])` replaces the individual fixture at that exact
+SQL key. It requires an explicit count even though the real server defaults an
+omitted count to one. A plain `client.query(sql)` therefore fails that strict
+fixture's guard. Use separate fake instances for independent strict tests.
+
+When ordinary and one-entry batch calls share SQL in a test, keep the individual
+registration and assert the batch request explicitly:
+
+```python
+import json
+
+sql = "SELECT 1 AS n"
+fake = FakeSnowflake().register(sql, [{"N": 1}])
+with make_client(fake) as client:
+    assert client.query(sql) == [{"N": 1}]
+    result = client.execute_statements([sql])
+    assert result.results[0].rows == [{"N": 1}]
+
+payload = json.loads(fake.requests[-1].content)
+assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "1"
+assert "bindings" not in payload
+```
+
+Individual fixtures do not enforce batch count or bindings. These request
+assertions supply that coverage. A malformed one-entry batch without a count can
+be identical to an ordinary request, so the fake cannot infer which API the
+caller intended. Multi-entry compositions normally use a separate joined SQL
+key and leave individual fixtures available.
