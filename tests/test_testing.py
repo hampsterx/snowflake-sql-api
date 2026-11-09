@@ -7,6 +7,7 @@ native<->wire round trip for every coerced type.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
@@ -20,6 +21,8 @@ from snowflake_sql_api.testing import (
     make_async_client,
     make_client,
 )
+
+from .streaming_support import call, fake_client
 
 # ---------------------------------------------------------------------------
 # Sync client through FakeSnowflake
@@ -339,3 +342,94 @@ async def test_fixtures_async(
 ) -> None:
     fake_snowflake.register("SELECT 2", [{"N": 2}])
     assert await async_snowflake_client.query_scalar("SELECT 2") == 2
+
+
+@pytest.mark.asyncio
+async def test_multi_fixture_composes_select_and_dml(async_mode):
+    from .streaming_support import call, fake_client
+
+    fake = FakeSnowflake().register("SELECT 1", [{"N": 1}])
+    fake.register_dml("DELETE FROM events", 2)
+    fake.register_multi(["SELECT 1", "DELETE FROM events"])
+    async with fake_client(fake, async_mode) as client:
+        result = await call(
+            client, async_mode, "execute_statements", ["SELECT 1", "DELETE FROM events"]
+        )
+    assert result.results[0].rows == [{"N": 1}]
+    assert result.results[1].rows == [{"number of rows affected": 2}]
+
+
+@pytest.mark.parametrize("kind", ["missing", "error", "nested"])
+def test_multi_fixture_requires_individual_successful_registrations(kind):
+    fake = FakeSnowflake()
+    if kind == "error":
+        fake.register_error("SELECT 1", "expected")
+    if kind == "nested":
+        fake.register("SELECT 1", []).register("SELECT 2", [])
+        fake.register_multi(["SELECT 1", "SELECT 2"])
+    sql = "SELECT 1\n;\nSELECT 2" if kind == "nested" else "SELECT 1"
+    with pytest.raises(FakeSnowflakeError, match="individual successful"):
+        fake.register_multi([sql])
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize(
+    "case", ["missing", "different", "variable", "integer", "bindings"]
+)
+def test_regression_multi_fixture_requires_count_and_rejects_bindings(count, case):
+    import httpx
+
+    fake = FakeSnowflake().register("SELECT 1", []).register("SELECT 2", [])
+    entries = ["SELECT 1", "SELECT 2"][:count]
+    fake.register_multi(entries)
+    extra = {
+        "missing": {},
+        "different": {"parameters": {"MULTI_STATEMENT_COUNT": str(count + 1)}},
+        "variable": {"parameters": {"MULTI_STATEMENT_COUNT": "0"}},
+        "integer": {"parameters": {"MULTI_STATEMENT_COUNT": count}},
+        "bindings": {
+            "parameters": {"MULTI_STATEMENT_COUNT": str(count)},
+            "bindings": {},
+        },
+    }[case]
+    request = httpx.Request(
+        "POST",
+        "https://example.test/api/v2/statements",
+        json={"statement": "\n;\n".join(entries), **extra},
+    )
+    with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
+        fake.handle(request)
+
+
+@pytest.mark.asyncio
+async def test_individual_fixture_reuses_ordinary_and_single_batch_calls(async_mode):
+    sql = "SELECT 1 AS n"
+    rows = [{"N": 1}, {"N": 2}]
+    fake = FakeSnowflake().register(sql, rows, partitions=2, polls_before_ready=1)
+    async with fake_client(fake, async_mode) as client:
+        assert await call(client, async_mode, "query", sql) == rows
+        assert (await call(client, async_mode, "execute_statements", [sql])).results[
+            0
+        ].rows == rows
+        handle = await call(client, async_mode, "submit_statements", [sql])
+        assert (await call(handle, async_mode, "result")).results[0].rows == rows
+    payloads = [json.loads(r.content) for r in fake.requests if r.method == "POST"]
+    assert "parameters" not in payloads[0]
+    for payload in payloads[1:]:
+        assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "1"
+        assert "bindings" not in payload
+
+
+@pytest.mark.asyncio
+async def test_strict_single_batch_fixture_replaces_individual_fixture(async_mode):
+    sql = "SELECT 1"
+    fake = FakeSnowflake().register(sql, [{"N": 1}]).register_multi([sql])
+    async with fake_client(fake, async_mode) as client:
+        with pytest.raises(FakeSnowflakeError, match="exact MULTI_STATEMENT_COUNT"):
+            await call(client, async_mode, "query", sql)
+        assert (await call(client, async_mode, "execute_statements", [sql])).results[
+            0
+        ].rows == [{"N": 1}]
+        fake.register(sql, [{"N": 2}])
+        assert await call(client, async_mode, "query", sql) == [{"N": 2}]

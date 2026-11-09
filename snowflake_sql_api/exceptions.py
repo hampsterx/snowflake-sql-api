@@ -12,10 +12,16 @@ from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from .batches import BatchOutcome, BatchPhase, BatchWriteResult, FailedBatch
+    from .multi_statement import (
+        MultiStatementOutcome,
+        MultiStatementPhase,
+        StatementResult,
+    )
 
 __all__ = [
     "SnowflakeError",
     "BatchWriteError",
+    "SnowflakeMultiStatementError",
     "SnowflakeConfigError",
     "SnowflakeAuthError",
     "SnowflakeRequestError",
@@ -92,6 +98,43 @@ class SnowflakeConfigError(SnowflakeError):
     """
 
 
+class SnowflakeMultiStatementError(SnowflakeError):
+    """A batch failed to submit, execute, or download. Inspect outcome before retrying."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        statement_handle: Optional[str],
+        expected_count: int,
+        known_statement_handles: tuple[str, ...] = (),
+        completed_results: tuple[StatementResult, ...] = (),
+        failed_index: Optional[int] = None,
+        phase: MultiStatementPhase,
+        outcome: MultiStatementOutcome,
+        submission_attempts: Optional[int] = None,
+        request_id: Optional[str] = None,
+        status_code: Optional[int] = None,
+        code: Optional[str] = None,
+        sql_state: Optional[str] = None,
+    ) -> None:
+        super().__init__(message, submission_attempts=submission_attempts)
+        self.statement_handle = statement_handle
+        self.expected_count = expected_count
+        self.known_statement_handles = known_statement_handles
+        self.completed_results = completed_results
+        self.failed_index = failed_index
+        self.phase = phase
+        self.outcome = outcome
+        self.request_id = request_id
+        self.status_code = status_code
+        self.code = code
+        self.sql_state = sql_state
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return partial(type(self), **self.__dict__), self.args
+
+
 class SnowflakeAuthError(SnowflakeError):
     """Snowflake rejected authentication (HTTP 401).
 
@@ -132,6 +175,7 @@ class SnowflakeRequestError(SnowflakeError):
         request_id: Optional[str] = None,
         statement_handle: Optional[str] = None,
         submission_attempts: Optional[int] = None,
+        statement_handles: Optional[tuple[str, ...]] = None,
     ) -> None:
         super().__init__(message, submission_attempts=submission_attempts)
         self.status_code = status_code
@@ -139,6 +183,7 @@ class SnowflakeRequestError(SnowflakeError):
         self.sql_state = sql_state
         self.request_id = request_id
         self.statement_handle = statement_handle
+        self.statement_handles = statement_handles
 
 
 class SnowflakeForbiddenError(SnowflakeRequestError):

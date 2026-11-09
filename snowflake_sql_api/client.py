@@ -41,12 +41,22 @@ from .exports import (
     validate_export_columns,
     write_jsonl,
 )
+from .multi_statement import (
+    MultiStatementPhase,
+    MultiStatementResult,
+    StatementResult,
+    _deadline,
+    _multi_payload,
+    _MultiStatementState,
+    _remaining,
+    _transaction_statements,
+)
 from .pagination import fetch_all_partitions, iter_result_rows
 from .retry import DEFAULT_RETRY_POLICY, RetryPolicy
 from .transport import StatementResponse, Transport
 from .types import ColumnMeta, Row, _validate_column_names, coerce_rows
 
-__all__ = ["SnowflakeClient", "QueryHandle"]
+__all__ = ["SnowflakeClient", "QueryHandle", "MultiStatementHandle"]
 
 #: Fallback wait, in seconds, when polling a long-running statement to completion.
 DEFAULT_POLL_TIMEOUT = 600.0
@@ -158,6 +168,79 @@ class QueryHandle:
 
     def cancel(self) -> None:
         """Cancel the running statement."""
+        self._client._transport.cancel(self.statement_handle)
+
+
+class MultiStatementHandle(_MultiStatementState):
+    """A caller-owned parent handle; attaching and retrieving never submit SQL."""
+
+    def __init__(
+        self, client: SnowflakeClient, statement_handle: str, *, expected_count: int
+    ) -> None:
+        if not isinstance(statement_handle, str) or not statement_handle.strip():
+            raise SnowflakeConfigError("a nonempty parent statement handle is required")
+        super().__init__(statement_handle, expected_count)
+        self._client = client
+
+    def result(
+        self, *, poll: bool = True, timeout: Optional[float] = None
+    ) -> MultiStatementResult:
+        """Collect ordered child results using one combined polling budget."""
+        return self._result(poll=poll, timeout=timeout, cancel_on_timeout=False)
+
+    def _result(
+        self, *, poll: bool, timeout: Optional[float], cancel_on_timeout: bool
+    ) -> MultiStatementResult:
+        deadline = _deadline(timeout, DEFAULT_POLL_TIMEOUT)
+        completed: List[StatementResult] = []
+        phase: MultiStatementPhase = "execution"
+        failed_index = None
+        try:
+            response = self._response
+            if response is None:
+                response = self._client._transport.get_statement(self.statement_handle)
+            if response.is_running:
+                if not poll:
+                    raise ResultNotReady(statement_handle=self.statement_handle)
+                response = self._client._poll(
+                    self.statement_handle,
+                    _remaining(deadline),
+                    cancel_on_timeout=cancel_on_timeout,
+                )
+            handles = self._discover(response)
+            self._response = response
+            phase = "result_fetch"
+            for index, handle in enumerate(handles):
+                failed_index = index
+                child = (
+                    response
+                    if self.expected_count == 1 and handle == self.statement_handle
+                    else self._client._transport.get_statement(handle)
+                )
+                columns, raw_rows = self._client._collect(
+                    child,
+                    timeout=_remaining(deadline),
+                    cancel_on_timeout=False,
+                    poll=poll,
+                )
+                completed.append(
+                    StatementResult(
+                        index, handle, tuple(columns), coerce_rows(raw_rows, columns)
+                    )
+                )
+            return MultiStatementResult(self.statement_handle, tuple(completed))
+        except ResultNotReady:
+            raise
+        except Exception as exc:
+            raise self._error(exc, phase, completed, failed_index) from exc
+
+    def status(self) -> str:
+        """Check only the parent request's execution status."""
+        response = self._client._transport.get_statement(self.statement_handle)
+        return "RUNNING" if response.is_running else "SUCCESS"
+
+    def cancel(self) -> None:
+        """Request parent cancellation; committed effects may remain."""
         self._client._transport.cancel(self.statement_handle)
 
 
@@ -494,6 +577,53 @@ class SnowflakeClient(_ClientBase):
             planner.confirm(batch, affected)
             del batch
         return planner.result()
+
+    # -- multi-statement requests ------------------------------------------
+
+    def submit_statements(self, statements: Sequence[str]) -> MultiStatementHandle:
+        """Submit trusted SQL entries together, without bindings, and return their parent."""
+        return self._submit_statements(statements, async_exec=True)
+
+    def execute_statements(self, statements: Sequence[str]) -> MultiStatementResult:
+        """Execute one request and collect each result; ordinary batches are not atomic."""
+        handle = self._submit_statements(statements, async_exec=False)
+        return handle._result(
+            poll=True, timeout=self._statement_timeout, cancel_on_timeout=True
+        )
+
+    def execute_transaction(self, statements: Sequence[str]) -> MultiStatementResult:
+        """Set abort-on-error and wrap trusted DML/SELECT in one transaction request.
+
+        Rollback after a server-side failure requires live verification for the
+        target environment. A timeout does not establish whether COMMIT ran.
+        """
+        return self.execute_statements(_transaction_statements(statements))
+
+    def _submit_statements(
+        self, statements: Sequence[str], *, async_exec: bool
+    ) -> MultiStatementHandle:
+        payload, count = _multi_payload(self, statements)
+        state = _MultiStatementState("", count)
+        state.request_id = str(uuid.uuid4())
+        self._notify(payload["statement"], None)
+        try:
+            response = self._transport.submit(
+                payload, request_id=state.request_id, async_exec=async_exec
+            )
+            state.submission_attempts = response.submission_attempts
+            parent = response.statement_handle
+            if not isinstance(parent, str) or not parent.strip():
+                raise SnowflakeRequestError(
+                    "multi-statement submit returned no parent handle"
+                )
+            handle = MultiStatementHandle(self, parent, expected_count=count)
+            handle.request_id = state.request_id
+            handle.submission_attempts = response.submission_attempts
+            handle._response = response
+            return handle
+        except Exception as exc:
+            state.statement_handle = getattr(exc, "statement_handle", None) or ""
+            raise state._error(exc, "submission") from exc
 
     # -- async submit -----------------------------------------------------
 

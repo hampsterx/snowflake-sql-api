@@ -330,3 +330,65 @@ async def test_retry_after_only_sleeps_when_another_attempt_will_run(
             await http_client.aclose()
         else:
             http_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 202])
+@pytest.mark.parametrize("handle", [None, "", " ", 123])
+@pytest.mark.parametrize("first_attempt", ["direct", "lost", "known handle"])
+async def test_regression_handleless_submission_is_not_success(
+    async_mode, status, handle, first_attempt
+):
+    from types import SimpleNamespace
+
+    from snowflake_sql_api.transport import AsyncTransport
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if len(requests) == 1:
+            if first_attempt == "lost":
+                raise httpx.ReadError("response lost", request=request)
+            if first_attempt == "known handle":
+                return httpx.Response(503, json={"statementHandle": "parent"})
+        # Synthetic malformed response, representing the reported missing handle.
+        return httpx.Response(
+            status,
+            json={"statementHandle": handle, "code": "0", "message": "replayed"},
+        )
+
+    http = (httpx.AsyncClient if async_mode else httpx.Client)(
+        transport=httpx.MockTransport(respond)
+    )
+    transport = (AsyncTransport if async_mode else Transport)(
+        HOST,
+        SimpleNamespace(token=lambda: "synthetic"),
+        client=http,
+        retry_policy=FAST_RETRY,
+    )
+    try:
+        with pytest.raises(SnowflakeRequestError, match="outcome is unknown") as caught:
+            result = transport.submit(
+                {"statement": "INSERT INTO t VALUES (1)"},
+                request_id="original-id",
+                retry=first_attempt == "direct",
+            )
+            if async_mode:
+                await result
+        error = caught.value
+        assert error.status_code == status
+        assert error.code == "0"
+        assert error.request_id == "original-id"
+        assert error.submission_attempts == (1 if first_attempt == "direct" else 2)
+        assert error.statement_handle == (
+            "parent" if first_attempt == "known handle" else None
+        )
+        assert len(requests) == error.submission_attempts
+        assert all(r.url.params["requestId"] == "original-id" for r in requests)
+        assert requests[-1].url.params["retry"] == "true"
+    finally:
+        if async_mode:
+            await http.aclose()
+        else:
+            http.close()

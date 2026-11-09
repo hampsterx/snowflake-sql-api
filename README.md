@@ -29,6 +29,7 @@ stays small and cold-starts quickly. Core dependencies: `httpx`, `PyJWT`,
 - Keypair (JWT) authentication, including encrypted private keys
 - Result type coercion (NUMBER/Decimal, dates/timestamps, VARIANT, and more)
 - Multi-partition result handling for large result sets
+- Ordered multi-statement results and constrained single-request transactions
 - Lazy row streams and bounded row batches, with CSV and JSONL exports
 - Query helpers, DML, batch insert, async statement submission
 - Caller-owned submission UUIDs and explicit replay across worker restarts
@@ -116,6 +117,47 @@ identity. Reconstruct replayable input and reconcile unknown outcomes before ret
 do not resume with the same advanced iterator. The async equivalent is awaited and
 accepts the same synchronous iterable, whose production can block the event loop.
 See [batch writes](docs/batch-writes.md) for limits and recovery semantics.
+
+## Multi-statement requests
+
+```python
+result = client.execute_statements([
+    "CREATE TEMPORARY TABLE report_values (n INTEGER)",
+    "INSERT INTO report_values VALUES (1), (2)",
+    "SELECT n FROM report_values ORDER BY n",
+])
+print(result.results[2].rows)
+
+result = client.execute_transaction([
+    "UPDATE balances SET amount = amount - 10 WHERE id = 1",
+    "UPDATE balances SET amount = amount + 10 WHERE id = 2",
+])
+```
+
+Each trusted SQL entry represents one statement without its terminating delimiter.
+There is no parameter binding or interpolation. Entries share request-scoped
+context; results stay distinct, ordered and fully partitioned. Async clients
+await the same methods. `submit_statements()` returns a parent handle that can
+be saved and attached later with `MultiStatementHandle` or
+`AsyncMultiStatementHandle`, without another POST.
+Submitted handles and `SnowflakeMultiStatementError.request_id` expose the
+original POST UUID for diagnostics. Attached handles have no known request UUID.
+For dynamic values, use a parameterized single statement or a suitable bound
+procedure call; the guide includes recipes for broader trusted SQL as well.
+
+Ordinary batches can partially commit. The transaction helper restricts its body
+to INSERT, UPDATE, DELETE, MERGE and SELECT. It sets
+`TRANSACTION_ABORT_ON_ERROR=TRUE` before BEGIN/body/COMMIT in the same request.
+All setup and boundary results are included, so body results start at index 2.
+Rollback and replay behavior require the opt-in live probes; skipped tests leave
+those properties unverified. Timeouts can leave the commit outcome unknown.
+A successful submission response without a valid statement handle raises a
+request error with an unknown outcome, including during replay.
+A child download failure after parent success means execution succeeded: retrieve
+results using the saved handle instead of submitting the writes again. For
+non-idempotent ordinary batches, consider `RetryPolicy(max_attempts=1)` and
+application reconciliation. See [multi-statement requests](docs/multi-statement.md)
+for restrictions, error metadata, recovery and the live verification gate.
 
 ## Replayable submissions
 
