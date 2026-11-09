@@ -592,7 +592,7 @@ class SnowflakeClient(_ClientBase):
         )
 
     def execute_transaction(self, statements: Sequence[str]) -> MultiStatementResult:
-        """Wrap supported trusted DML/SELECT entries in one BEGIN/body/COMMIT request.
+        """Set abort-on-error and wrap trusted DML/SELECT in one transaction request.
 
         Rollback after a server-side failure requires live verification for the
         target environment. A timeout does not establish whether COMMIT ran.

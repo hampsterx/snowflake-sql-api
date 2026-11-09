@@ -19,6 +19,7 @@ from snowflake_sql_api import (
     SnowflakeClient,
     SnowflakeMultiStatementError,
     SnowflakeProgrammingError,
+    SnowflakeRequestError,
 )
 from snowflake_sql_api.escaping import quote_identifier
 
@@ -121,6 +122,12 @@ async def test_transaction_commit_and_rollback_release_locks(
         assert (
             len(settings) == 1 and settings[0]["value"].lower() == "true"
         ), "probe requires default AUTOCOMMIT=TRUE"
+        abort_setting = await value(
+            client.query("SHOW PARAMETERS LIKE 'TRANSACTION_ABORT_ON_ERROR' IN SESSION")
+        )
+        record_property(
+            "abort_on_error_default", json.dumps(abort_setting, default=str)
+        )
         successful = await value(
             client.execute_transaction(
                 [
@@ -129,7 +136,7 @@ async def test_transaction_commit_and_rollback_release_locks(
                 ]
             )
         )
-        assert len(successful.results) == 4
+        assert len(successful.results) == 5
         assert observer.query(f"SELECT ID, AMOUNT FROM {table} ORDER BY ID") == [
             {"ID": 0, "AMOUNT": 10},
             {"ID": 1, "AMOUNT": 20},
@@ -265,7 +272,7 @@ async def test_partial_failure_replay_observations(
             },
         }
         for retry in (False, True):
-            with pytest.raises(SnowflakeProgrammingError) as caught:
+            with pytest.raises(SnowflakeRequestError) as caught:
                 response = await value(
                     client._transport.submit(
                         payload, request_id=request_id, retry=retry
@@ -280,14 +287,27 @@ async def test_partial_failure_replay_observations(
             observations.append(
                 {
                     "retry": retry,
+                    "status_code": caught.value.status_code,
                     "code": caught.value.code,
+                    "sql_state": caught.value.sql_state,
+                    "request_id": caught.value.request_id,
+                    "statement_handle": caught.value.statement_handle,
+                    "error_type": type(caught.value).__name__,
                     "prefix_rows": observer.query_scalar(
                         f"SELECT COUNT(*) FROM {table} WHERE ID=1"
                     ),
                 }
             )
+            record_property("partial_failure_replay", json.dumps(observations))
+            if retry and caught.value.status_code in (200, 202):
+                assert not isinstance(caught.value, SnowflakeProgrammingError)
+                assert "outcome is unknown" in str(caught.value)
+                assert caught.value.request_id == request_id
+            else:
+                assert isinstance(caught.value, SnowflakeProgrammingError)
+                assert caught.value.status_code == 422
+                assert "division by zero" in str(caught.value).lower()
             assert (
                 observer.query_scalar(f"SELECT COUNT(*) FROM {table} WHERE ID=2") == 0
             )
     assert observations[0]["prefix_rows"] == 1
-    record_property("partial_failure_replay", json.dumps(observations))

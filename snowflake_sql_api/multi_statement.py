@@ -80,7 +80,12 @@ def _transaction_statements(statements: Sequence[str]) -> tuple[str, ...]:
             raise SnowflakeConfigError(
                 "transaction body supports only INSERT, UPDATE, DELETE, MERGE and SELECT"
             )
-    return ("BEGIN TRANSACTION", *body, "COMMIT")
+    return (
+        "ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE",
+        "BEGIN TRANSACTION",
+        *body,
+        "COMMIT",
+    )
 
 
 def _multi_payload(

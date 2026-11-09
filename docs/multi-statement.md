@@ -178,13 +178,26 @@ result = client.execute_transaction([
     "UPDATE balances SET amount = amount - 10 WHERE id = 1",
     "UPDATE balances SET amount = amount + 10 WHERE id = 2",
 ])
-# Results 0 and 3 describe BEGIN and COMMIT; body results are at 1 and 2.
+# Result 0 sets abort-on-error; 1 and 4 describe BEGIN and COMMIT.
+# Body results are at 2 and 3.
 ```
 
-The helper constructs `BEGIN TRANSACTION`, the body, and `COMMIT` in one request
-with an exact count of `len(body) + 2`, as required by
+The helper constructs `ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE`,
+`BEGIN TRANSACTION`, the body, and `COMMIT` in one request with an exact count
+of `len(body) + 3`, as required by
 [Snowflake's explicit transaction protocol](https://docs.snowflake.com/en/developer-guide/sql-api/using-transactions).
-It sends no separate rollback request. An empty body is rejected locally.
+The setup enables server-side abort on statement errors without changing account
+or user settings. It is SQL because `TRANSACTION_ABORT_ON_ERROR` is absent from
+the [SQL API request-parameter allowlist](https://docs.snowflake.com/en/developer-guide/sql-api/reference#statements_parameters).
+All setup, boundary and body results remain in their submitted order. An empty
+body is rejected locally.
+
+The helper sends no separate rollback request: the SQL API requires transaction
+boundaries in one request. A failed statement prevents later statements,
+including COMMIT, from executing. Snowflake documents that an aborted transaction
+still requires COMMIT or ROLLBACK to close it; enabling abort-on-error alone does
+not establish immediate lock release. The live rollback and independent lock
+probe below remain required before relying on this helper's failure cleanup.
 
 Only leading INSERT, UPDATE, DELETE, MERGE, and SELECT forms are accepted, after
 ASCII whitespace, `--` line comments, and non-nested `/* ... */` comments.
@@ -201,6 +214,7 @@ the existing raw batch API:
 
 ```python
 result = client.execute_statements([
+    "ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE",
     "BEGIN TRANSACTION",
     "WITH x AS (SELECT 1 AS n) SELECT n FROM x",
     "COMMIT",
@@ -232,9 +246,16 @@ probe requires the intended divide-by-zero failure and query-history evidence
 that both preceding writes succeeded within the same transaction. Missing history
 fails the probe, including when the last 10,000 queries in its 15-minute search
 window omit the needed statements. It records the observed AUTOCOMMIT setting
-and requires it to be TRUE without changing it. They also
+and requires it to be TRUE without changing it, and records the abort-on-error
+default from a separate request. That default does not prove the helper's
+request-local setting. They also
 discard a real successful response before retrying a completed parent, and
 record prefix-row counts when replaying a partially failed ordinary batch.
+A replay returning HTTP 200 or 202 without a valid handle must raise a request
+error, preserving the request ID and an unknown outcome. It must not become an
+empty success or an invented repeat of the original 422. A handle from an earlier
+attempt remains diagnostic information for GET-based recovery, not evidence that
+the handleless response completed the batch. No replacement UUID is submitted.
 Skipped probes leave these properties unverified. Keep account configuration and
 probe evidence private; do not publish credentials or real account identifiers.
 

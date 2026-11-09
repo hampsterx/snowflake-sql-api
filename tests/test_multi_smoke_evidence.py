@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from snowflake_sql_api import SnowflakeMultiStatementError
+from snowflake_sql_api import (
+    SnowflakeMultiStatementError,
+    SnowflakeProgrammingError,
+    SnowflakeRequestError,
+)
+from snowflake_sql_api.transport import StatementResponse
 
 from .smoke import test_multi_statement as smoke
 
@@ -21,6 +26,7 @@ from .smoke import test_multi_statement as smoke
         "missing prefix",
         "failed prefix",
         "other transaction",
+        "lock held",
     ],
 )
 @pytest.mark.parametrize("formatted_history", [False, True])
@@ -40,7 +46,7 @@ async def test_regression_rollback_probe_requires_execution_evidence(
         def execute_transaction(self, body):
             self.calls += 1
             if self.calls == 1:
-                return SimpleNamespace(results=(None,) * 4)
+                return SimpleNamespace(results=(None,) * 5)
             statements.extend(body)
             raise SnowflakeMultiStatementError(
                 (
@@ -49,7 +55,7 @@ async def test_regression_rollback_probe_requires_execution_evidence(
                     else "Division by zero"
                 ),
                 statement_handle="parent",
-                expected_count=5,
+                expected_count=6,
                 phase="execution",
                 outcome="failed",
                 status_code=400 if fault == "non-422" else 422,
@@ -85,6 +91,7 @@ async def test_regression_rollback_probe_requires_execution_evidence(
             return history
 
         def execute(self, sql):
+            assert fault != "lock held", "independent UPDATE still blocked"
             return 1
 
         def query_scalar(self, sql):
@@ -109,3 +116,69 @@ async def test_regression_rollback_probe_requires_execution_evidence(
             )
         assert "rollback_and_lock_release" not in observations
         assert observations["transaction_request_id"] == "diagnostic-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.regression
+@pytest.mark.parametrize(
+    "fault", [None, "success", "wrong identity", "wrong error", "suffix"]
+)
+@pytest.mark.parametrize("repeat_prefix", [False, True])
+async def test_regression_partial_replay_probe_rejects_false_success(
+    monkeypatch, async_mode, fault, repeat_prefix
+):
+    observations = {}
+
+    class Transport:
+        def submit(self, payload, *, request_id, retry):
+            if retry and fault == "success":
+                return StatementResponse(200, {})
+            if not retry:
+                error = SnowflakeProgrammingError("Division by zero", status_code=422)
+            else:
+                error = SnowflakeRequestError(
+                    "execution outcome is unknown", status_code=200
+                )
+                if fault == "wrong error":
+                    error.status_code = 400
+            error.request_id = (
+                "different-id" if retry and fault == "wrong identity" else request_id
+            )
+            raise error
+
+    class Client:
+        _transport = Transport()
+
+        def _build_payload(self, sql, params):
+            return {"statement": sql}
+
+    class Observer:
+        def __init__(self):
+            self.prefix_reads = 0
+
+        def query_scalar(self, sql):
+            if "ID=2" in sql:
+                return 1 if fault == "suffix" else 0
+            self.prefix_reads += 1
+            return 2 if repeat_prefix and self.prefix_reads == 2 else 1
+
+    @asynccontextmanager
+    async def client(options, mode):
+        assert mode == async_mode
+        yield Client()
+
+    monkeypatch.setattr(smoke, "multi_client", client)
+    probe = smoke.test_partial_failure_replay_observations
+    args = (
+        {"parameters": {}},
+        ('"SYNTHETIC"', Observer()),
+        async_mode,
+        observations.__setitem__,
+    )
+    if fault is None:
+        await probe(*args)
+        assert '"status_code": 200' in observations["partial_failure_replay"]
+        assert "SnowflakeRequestError" in observations["partial_failure_replay"]
+    else:
+        with pytest.raises((AssertionError, pytest.fail.Exception)):
+            await probe(*args)

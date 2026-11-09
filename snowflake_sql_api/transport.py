@@ -21,6 +21,7 @@ import httpx
 
 from .exceptions import (
     SnowflakeAuthError,
+    SnowflakeError,
     SnowflakeForbiddenError,
     SnowflakeProgrammingError,
     SnowflakeRequestError,
@@ -92,11 +93,22 @@ def _json_body(response: httpx.Response) -> Dict[str, Any]:
     return {"data": parsed}
 
 
-def _interpret(response: httpx.Response) -> StatementResponse:
+def _interpret(
+    response: httpx.Response, *, is_submit: bool = False
+) -> StatementResponse:
     """Map an HTTP response to a :class:`StatementResponse` or raise a typed error."""
     status = response.status_code
     body = _json_body(response)
     if status in (200, 202):
+        handle = body.get("statementHandle")
+        if is_submit and (not isinstance(handle, str) or not handle.strip()):
+            raise SnowflakeRequestError(
+                "statement submit returned no statement handle (missing or invalid); "
+                "execution outcome is unknown",
+                status_code=status,
+                code=body.get("code"),
+                sql_state=body.get("sqlState"),
+            )
         return StatementResponse(status, body)
     if status == 422:
         raise SnowflakeProgrammingError(
@@ -292,7 +304,7 @@ class Transport(_TransportBase):
                     if is_submit and last_exc.statement_handle:
                         known_handle = last_exc.statement_handle
                     continue
-                result = _interpret(response)
+                result = _interpret(response, is_submit=is_submit)
                 result.submission_attempts = attempts if is_submit else None
                 result._submission_handle = known_handle
                 return result
@@ -302,6 +314,8 @@ class Transport(_TransportBase):
         except Exception as exc:
             # Preserve original exception identity, including HTTPX decoding errors.
             exc.submission_attempts = attempts if is_submit else None  # type: ignore[attr-defined]
+            if is_submit and params is not None and isinstance(exc, SnowflakeError):
+                exc.request_id = params["requestId"]
             if known_handle and not getattr(exc, "statement_handle", None):
                 exc.statement_handle = known_handle  # type: ignore[attr-defined]
             raise
@@ -406,7 +420,7 @@ class AsyncTransport(_TransportBase):
                     if is_submit and last_exc.statement_handle:
                         known_handle = last_exc.statement_handle
                     continue
-                result = _interpret(response)
+                result = _interpret(response, is_submit=is_submit)
                 result.submission_attempts = attempts if is_submit else None
                 result._submission_handle = known_handle
                 return result
@@ -416,6 +430,8 @@ class AsyncTransport(_TransportBase):
         except Exception as exc:
             # Preserve original exception identity, including HTTPX decoding errors.
             exc.submission_attempts = attempts if is_submit else None  # type: ignore[attr-defined]
+            if is_submit and params is not None and isinstance(exc, SnowflakeError):
+                exc.request_id = params["requestId"]
             if known_handle and not getattr(exc, "statement_handle", None):
                 exc.statement_handle = known_handle  # type: ignore[attr-defined]
             raise

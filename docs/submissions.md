@@ -128,6 +128,16 @@ a supported recovery recipe. If replay is uncertain, keep the same durable job
 and ID. A timeout, exhausted retries or worker death does not establish failure;
 never automatically start the operation again with a fresh UUID.
 
+A statement POST returning HTTP 200 or 202 without a nonblank string
+`statementHandle` raises `SnowflakeRequestError`, including during replay. The
+error retains the observed HTTP status, available code/SQL state, request ID and
+submission attempt count. This is an unknown execution outcome, not proof of
+success or a reconstruction of an earlier SQL error. The transport stops without
+another POST. A handle retained from an earlier response is available on the
+error for GET-based recovery; it does not make an incomplete replay response a
+successful result. Cancellation acknowledgments and result-partition GETs can
+legitimately omit handles and do not use this submission check.
+
 [Snowflake's resubmission documentation](https://docs.snowflake.com/en/developer-guide/sql-api/submitting-requests#resubmitting-a-request-to-execute-sql-statements)
 describes UUID `requestId` plus `retry=true`, avoiding re-execution of statements
 that already succeed. History lookup adds overhead. The documented mechanism

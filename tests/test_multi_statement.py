@@ -440,21 +440,27 @@ async def test_parent_poll_422_retains_only_valid_error_handles(
 
 
 @pytest.mark.asyncio
-async def test_transaction_one_post_exact_count_and_wrapped_results(async_mode):
+async def test_regression_transaction_sets_abort_before_begin_in_one_post(async_mode):
     body = ["-- prefix\r\n/* comment */ INSERT INTO events SELECT 1", "SELECT 1"]
-    entries = ["BEGIN TRANSACTION", *body, "COMMIT"]
+    entries = [
+        "ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE",
+        "BEGIN TRANSACTION",
+        *body,
+        "COMMIT",
+    ]
     fake = FakeSnowflake()
     for sql in entries:
         fake.register(sql, [{"VALUE": "ok"}])
     fake.register_multi(entries)
     async with fake_client(fake, async_mode) as client:
         result = await invoke(client, "execute_transaction", body)
-    assert [r.index for r in result.results] == [0, 1, 2, 3]
+    assert [r.index for r in result.results] == [0, 1, 2, 3, 4]
     posts = [r for r in fake.requests if r.method == "POST"]
     assert len(posts) == 1
     payload = json.loads(posts[0].content)
     assert payload["statement"] == "\n;\n".join(entries)
-    assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "4"
+    assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "5"
+    assert "TRANSACTION_ABORT_ON_ERROR" not in payload["parameters"]
 
 
 @pytest.mark.asyncio
@@ -501,15 +507,20 @@ async def test_transaction_disallowed_forms_fail_before_notifications(async_mode
     ],
 )
 async def test_transaction_allowed_leading_keywords(async_mode, keyword):
-    entries = ["BEGIN TRANSACTION", "\t/* first */-- second\n" + keyword, "COMMIT"]
+    entries = [
+        "ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE",
+        "BEGIN TRANSACTION",
+        "\t/* first */-- second\n" + keyword,
+        "COMMIT",
+    ]
     fake = FakeSnowflake()
     for sql in entries:
         fake.register(sql.strip(), [])
     fake.register_multi(entries)
     async with fake_client(fake, async_mode) as client:
         assert (
-            len((await invoke(client, "execute_transaction", [entries[1]])).results)
-            == 3
+            len((await invoke(client, "execute_transaction", [entries[2]])).results)
+            == 4
         )
 
 
@@ -643,6 +654,7 @@ async def test_documented_single_statement_binding_routes(async_mode, sql):
 @pytest.mark.asyncio
 async def test_documented_explicit_cte_transaction_route(async_mode):
     statements = [
+        "ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE",
         "BEGIN TRANSACTION",
         "WITH x AS (SELECT 1 AS n) SELECT n FROM x",
         "COMMIT",
@@ -657,5 +669,5 @@ async def test_documented_explicit_cte_transaction_route(async_mode):
     assert len(posts) == 1
     payload = json.loads(posts[0].content)
     assert payload["statement"] == "\n;\n".join(statements)
-    assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "3"
+    assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "4"
     assert "bindings" not in payload

@@ -100,10 +100,15 @@ probe requires both earlier writes to succeed in the same transaction before the
 intended divide-by-zero failure, plus an independent lock probe. Missing recent
 history fails rather than establishing rollback. It also records the effective
 AUTOCOMMIT observation and requires it to be TRUE; do not change account settings
-to make a probe pass. The example creates a private directory under your home,
+to make a probe pass. It records the abort-on-error default separately; only the
+independent lock probe establishes whether the helper's request-local setting
+releases locks after the intended failure. The example creates a private directory under your home,
 which persists across reboots; preserve it with the release records.
 Replay of a partially failed ordinary batch can repeat its prefix, and the
 recorded counts remain observations, not an exactly-once assertion.
+The replay probe accepts a handleless 200/202 only as a raised request error with
+an unknown outcome and the original request ID. Reporting it as success fails
+the gate; it must not be mislabeled as a reconstructed 422.
 Ordinary `pytest tests/smoke` still allows opt-in skips and does
 not enforce this release gate.
 
