@@ -176,7 +176,7 @@ class AsyncMultiStatementHandle(_MultiStatementState):
         failed_index = None
         try:
             response = self._response
-            if response is None:
+            if response is None or (response.is_running and not poll):
                 response = await self._client._transport.get_statement(
                     self.statement_handle
                 )

@@ -197,7 +197,7 @@ class MultiStatementHandle(_MultiStatementState):
         failed_index = None
         try:
             response = self._response
-            if response is None:
+            if response is None or (response.is_running and not poll):
                 response = self._client._transport.get_statement(self.statement_handle)
             if response.is_running:
                 if not poll:

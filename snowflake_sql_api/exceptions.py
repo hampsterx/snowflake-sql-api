@@ -132,7 +132,24 @@ class SnowflakeMultiStatementError(SnowflakeError):
         self.sql_state = sql_state
 
     def __reduce__(self) -> tuple[Any, ...]:
-        return partial(type(self), **self.__dict__), self.args
+        fields = {
+            key: getattr(self, key)
+            for key in (
+                "statement_handle",
+                "expected_count",
+                "known_statement_handles",
+                "completed_results",
+                "failed_index",
+                "phase",
+                "outcome",
+                "submission_attempts",
+                "request_id",
+                "status_code",
+                "code",
+                "sql_state",
+            )
+        }
+        return partial(type(self), **fields), self.args, self.__dict__
 
 
 class SnowflakeAuthError(SnowflakeError):

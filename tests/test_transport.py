@@ -332,6 +332,7 @@ async def test_retry_after_only_sleeps_when_another_attempt_will_run(
             http_client.close()
 
 
+@respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 202])
 @pytest.mark.parametrize("handle", [None, "", " ", 123])
@@ -343,24 +344,18 @@ async def test_regression_handleless_submission_is_not_success(
 
     from snowflake_sql_api.transport import AsyncTransport
 
-    requests = []
-
-    def respond(request):
-        requests.append(request)
-        if len(requests) == 1:
-            if first_attempt == "lost":
-                raise httpx.ReadError("response lost", request=request)
-            if first_attempt == "known handle":
-                return httpx.Response(503, json={"statementHandle": "parent"})
-        # Synthetic malformed response, representing the reported missing handle.
-        return httpx.Response(
+    responses = [
+        httpx.Response(
             status,
             json={"statementHandle": handle, "code": "0", "message": "replayed"},
         )
-
-    http = (httpx.AsyncClient if async_mode else httpx.Client)(
-        transport=httpx.MockTransport(respond)
-    )
+    ]
+    if first_attempt == "lost":
+        responses.insert(0, httpx.ReadError("response lost"))
+    elif first_attempt == "known handle":
+        responses.insert(0, httpx.Response(503, json={"statementHandle": "parent"}))
+    route = respx.post(STATEMENTS_URL).mock(side_effect=responses)
+    http = (httpx.AsyncClient if async_mode else httpx.Client)()
     transport = (AsyncTransport if async_mode else Transport)(
         HOST,
         SimpleNamespace(token=lambda: "synthetic"),
@@ -384,6 +379,7 @@ async def test_regression_handleless_submission_is_not_success(
         assert error.statement_handle == (
             "parent" if first_attempt == "known handle" else None
         )
+        requests = [call.request for call in route.calls]
         assert len(requests) == error.submission_attempts
         assert all(r.url.params["requestId"] == "original-id" for r in requests)
         assert requests[-1].url.params["retry"] == "true"

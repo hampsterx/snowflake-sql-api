@@ -207,6 +207,87 @@ async def test_submit_parent_only_attach_status_cancel_and_get_only_recovery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.regression
+@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize("check_status", [False, True])
+async def test_regression_nonpolling_submitted_parent_refreshes_running_response(
+    async_mode, private_key_pem, count, check_status
+):
+    requests = []
+    complete = False
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST" or not complete:
+            return httpx.Response(202, json=running_body("parent"))
+        if request.url.path.endswith("/parent"):
+            body = (
+                result_body("parent")
+                if count == 1
+                else {"statementHandle": "parent", "statementHandles": ["one", "two"]}
+            )
+            return httpx.Response(200, json=body)
+        handle = request.url.path.rsplit("/", 1)[-1]
+        assert handle in ("one", "two")
+        return httpx.Response(
+            200, json=result_body(handle, "1" if handle == "one" else "2")
+        )
+
+    async with wire_client(handler, private_key_pem, async_mode) as client:
+        submitted = await invoke(
+            client, "submit_statements", [f"SELECT {n}" for n in range(1, count + 1)]
+        )
+        with pytest.raises(ResultNotReady) as caught:
+            await invoke(submitted, "result", poll=False)
+        assert caught.value.statement_handle == "parent"
+        assert [r.method for r in requests] == ["POST", "GET"]
+        complete = True
+        if check_status:
+            assert await invoke(submitted, "status") == "SUCCESS"
+        before = len(requests)
+        result = await invoke(submitted, "result", poll=False)
+        assert requests[before].url.path.endswith("/parent")
+        assert len(requests) - before == (1 if count == 1 else 3)
+        assert [item.rows for item in result.results] == [
+            [{"N": n}] for n in range(1, count + 1)
+        ]
+        before = len(requests)
+        repeated = await invoke(submitted, "result", poll=False)
+        assert [item.rows for item in repeated.results] == [
+            item.rows for item in result.results
+        ]
+        assert len(requests) - before == (0 if count == 1 else 2)
+    assert sum(r.method == "POST" for r in requests) == 1
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("annotation", ["note", "attribute", "both"])
+def test_regression_multi_error_pickle_preserves_application_state(annotation):
+    error = SnowflakeMultiStatementError(
+        "synthetic failure",
+        statement_handle="parent",
+        expected_count=2,
+        known_statement_handles=("one", "two"),
+        failed_index=1,
+        phase="result_fetch",
+        outcome="succeeded",
+        submission_attempts=2,
+        request_id="original-id",
+        status_code=422,
+        code="100132",
+        sql_state="P0000",
+    )
+    if annotation in ("note", "both"):
+        error.add_note("synthetic diagnostic note")
+    if annotation in ("attribute", "both"):
+        error.diagnostics = {"trace": "synthetic"}
+    restored = pickle.loads(pickle.dumps(error))
+    assert type(restored) is type(error)
+    assert restored.args == error.args
+    assert restored.__dict__ == error.__dict__
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "children",
     [None, [], ["one"], ["one", ""], ["one", 2], "one,two", ["one", "two", "three"]],
