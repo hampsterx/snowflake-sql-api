@@ -35,7 +35,9 @@ async def insert(client: Any, async_mode: bool, rows: Any, **kwargs: Any) -> Any
 
 
 def success(count: int) -> httpx.Response:
-    return httpx.Response(200, json={"stats": {"numRowsInserted": count}})
+    return httpx.Response(
+        200, json={"statementHandle": "batch-h", "stats": {"numRowsInserted": count}}
+    )
 
 
 def row_count(request: httpx.Request, width: int = 1) -> int:
@@ -478,7 +480,11 @@ async def test_missing_handle_and_unreadable_affected_count(
 ):
     for status, body, outcome in [
         (202, {}, "unknown"),
-        (200, {"stats": {"numRowsInserted": "bad"}}, "succeeded"),
+        (
+            200,
+            {"statementHandle": "h", "stats": {"numRowsInserted": "bad"}},
+            "succeeded",
+        ),
     ]:
         async with wire_client(
             lambda r, status=status, body=body: httpx.Response(status, json=body),
@@ -660,7 +666,7 @@ async def test_regression_invalid_affected_count_stops_batches_with_succeeded_ou
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, json=body)
+        return httpx.Response(200, json={"statementHandle": "h", **body})
 
     async with wire_client(handler, private_key_pem, async_mode) as client:
         with pytest.raises(BatchWriteError) as info:
@@ -680,7 +686,10 @@ async def test_affected_count_fallback_valid_and_existing_tolerance_preserved(
     malformed = False
 
     def handler(request):
-        return httpx.Response(200, json={"data": [["bad" if malformed else "2"]]})
+        return httpx.Response(
+            200,
+            json={"statementHandle": "h", "data": [["bad" if malformed else "2"]]},
+        )
 
     async with wire_client(handler, private_key_pem, async_mode) as client:
         assert (await insert(client, async_mode, [[1], [2]])).rows_affected == 2
@@ -876,7 +885,13 @@ async def test_regression_retry_retains_handle_from_earlier_post_response(
                 200, headers={"Content-Encoding": "gzip"}, content=b"corrupt gzip"
             )
         if final == "bad_count":
-            return httpx.Response(200, json={"stats": {"numRowsInserted": "bad"}})
+            return httpx.Response(
+                200,
+                json={
+                    "statementHandle": "known-h",
+                    "stats": {"numRowsInserted": "bad"},
+                },
+            )
         return httpx.Response(
             final, json={"message": "final error", "code": "final-code"}
         )
@@ -910,7 +925,7 @@ async def test_regression_retry_retains_handle_from_earlier_post_response(
         assert request.url.params["retry"] == "true"
 
 
-async def test_retained_submit_handle_can_poll_and_survives_poll_failure(
+async def test_regression_handleless_202_retains_handle_without_polling(
     async_mode, private_key_pem
 ):
     requests = []
@@ -921,23 +936,21 @@ async def test_retained_submit_handle_can_poll_and_survives_poll_failure(
             return httpx.Response(408, json={"statementHandle": "known-h"})
         if len(requests) == 2:
             return httpx.Response(202, json={"message": "still running"})
-        assert request.method == "GET"
-        assert request.url.path.endswith("/known-h")
-        return httpx.Response(403, json={"message": "poll forbidden"})
+        pytest.fail("malformed submit must stop before GET")
 
     async with wire_client(handler, private_key_pem, async_mode) as client:
         with pytest.raises(BatchWriteError) as info:
             await insert(client, async_mode, iter([[1], [2]]), max_rows=1)
-    assert len(requests) == 3
+    assert len(requests) == 2
     assert info.value.failed_batch.statement_handle == "known-h"
     assert info.value.failed_batch.submission_attempts == 2
-    assert info.value.phase == "execution"
+    assert info.value.phase == "submission"
     assert info.value.outcome == "unknown"
-    assert info.value.__cause__.submission_attempts is None
+    assert info.value.__cause__.submission_attempts == 2
     assert info.value.consumed_rows == 1
 
 
-async def test_successful_submit_keeps_handle_without_changing_body_or_other_requests(
+async def test_regression_handleless_200_keeps_recovery_handle_only_for_its_request(
     async_mode, private_key_pem
 ):
     calls = 0
@@ -947,17 +960,21 @@ async def test_successful_submit_keeps_handle_without_changing_body_or_other_req
         calls += 1
         if calls == 1:
             return httpx.Response(408, json={"statementHandle": "known-h"})
+        if calls in (2, 3):
+            return httpx.Response(200, json={"stats": {"numRowsInserted": 1}})
         return success(1)
 
     async with wire_client(handler, private_key_pem, async_mode) as client:
         transport = client._transport
-        result = transport.submit(
-            {"statement": "INSERT INTO t VALUES (1)"}, request_id="r"
-        )
-        result = await result if async_mode else result
-        assert result.statement_handle == "known-h"
-        assert result.submission_attempts == 2
-        assert "statementHandle" not in result.body
+        with pytest.raises(SnowflakeRequestError) as caught:
+            result = transport.submit(
+                {"statement": "INSERT INTO t VALUES (1)"}, request_id="r"
+            )
+            if async_mode:
+                await result
+        assert caught.value.statement_handle == "known-h"
+        assert caught.value.submission_attempts == 2
+        assert caught.value.request_id == "r"
         result = transport.get_statement("other-h")
         result = await result if async_mode else result
         assert result.statement_handle is None
@@ -966,7 +983,7 @@ async def test_successful_submit_keeps_handle_without_changing_body_or_other_req
             {"statement": "INSERT INTO t VALUES (2)"}, request_id="r2"
         )
         result = await result if async_mode else result
-        assert result.statement_handle is None
+        assert result.statement_handle == "batch-h"
         assert result.submission_attempts == 1
     assert calls == 4
 

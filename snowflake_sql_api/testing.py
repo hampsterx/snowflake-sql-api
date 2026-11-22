@@ -38,7 +38,7 @@ when the package is installed; no ``conftest.py`` wiring is required.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import (
@@ -264,6 +264,8 @@ class _Reg:
     polls_before_ready: int = 0
     stats: Optional[Dict[str, int]] = None
     error: Optional[_Error] = None
+    children: Optional[Tuple[_Reg, ...]] = None
+    statement_count: Optional[int] = None
 
 
 @dataclass
@@ -272,6 +274,7 @@ class _State:
 
     reg: _Reg
     remaining_polls: int
+    children: Optional[Tuple[str, ...]] = None
 
 
 def _normalize_columns(
@@ -397,7 +400,40 @@ class FakeSnowflake:
 
     def register_dml(self, sql: str, rowcount: int) -> "FakeSnowflake":
         """Register a DML/DDL statement, returning ``rowcount`` rows affected."""
-        self._exact[sql] = _Reg(row_type=[], chunks=[[[str(rowcount)]]])
+        self._exact[sql] = _Reg(
+            row_type=[{"name": "number of rows affected", "type": "fixed", "scale": 0}],
+            chunks=[[[str(rowcount)]]],
+        )
+        return self
+
+    def register_multi(self, statements: Sequence[str]) -> "FakeSnowflake":
+        """Compose strict batch fixtures, checking explicit count and no bindings.
+
+        A one-entry composition replaces that exact individual fixture. For
+        shared ordinary/batch use, retain ``register()`` and assert the batch
+        payload in ``requests`` instead. No SQL is interpreted.
+        """
+        from .multi_statement import _statements
+
+        entries = _statements(statements)
+        children = []
+        for sql in entries:
+            reg = self._lookup(sql)
+            if reg is None or reg.error is not None or reg.children is not None:
+                raise FakeSnowflakeError(
+                    f"register an individual successful result first: {sql!r}"
+                )
+            children.append(reg)
+        self._exact["\n;\n".join(entries)] = (
+            replace(children[0], statement_count=1)
+            if len(children) == 1
+            else _Reg(
+                row_type=[],
+                chunks=[[]],
+                children=tuple(children),
+                statement_count=len(children),
+            )
+        )
         return self
 
     def register_error(
@@ -493,10 +529,19 @@ class FakeSnowflake:
         return f"stmt-{self._counter}"
 
     def _on_submit(self, request: httpx.Request) -> httpx.Response:
-        sql = json.loads(request.content).get("statement", "")
+        payload = json.loads(request.content)
+        sql = payload.get("statement", "")
         reg = self._lookup(sql)
         if reg is None:
             raise FakeSnowflakeError(f"no result registered for statement: {sql!r}")
+        if reg.statement_count is not None and (
+            payload.get("parameters", {}).get("MULTI_STATEMENT_COUNT")
+            != str(reg.statement_count)
+            or "bindings" in payload
+        ):
+            raise FakeSnowflakeError(
+                "multi fixture requires exact MULTI_STATEMENT_COUNT and no bindings"
+            )
         handle = self._next_handle()
         if reg.error is not None:
             err = reg.error
@@ -510,6 +555,13 @@ class FakeSnowflake:
                 },
             )
         self._state[handle] = _State(reg=reg, remaining_polls=reg.polls_before_ready)
+        if reg.children is not None:
+            child_handles = []
+            for child in reg.children:
+                child_handle = self._next_handle()
+                self._state[child_handle] = _State(child, child.polls_before_ready)
+                child_handles.append(child_handle)
+            self._state[handle].children = tuple(child_handles)
         async_exec = request.url.params.get("async") == "true"
         if async_exec or reg.polls_before_ready > 0:
             return httpx.Response(202, json=running_body(handle))
@@ -537,6 +589,14 @@ class FakeSnowflake:
 
     def _result_response(self, handle: str) -> httpx.Response:
         reg = self._state[handle].reg
+        if self._state[handle].children is not None:
+            return httpx.Response(
+                200,
+                json={
+                    "statementHandle": handle,
+                    "statementHandles": list(self._state[handle].children or ()),
+                },
+            )
         body = ok_body(
             reg.row_type,
             reg.chunks[0],

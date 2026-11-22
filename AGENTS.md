@@ -91,13 +91,17 @@ unless its variables are set:
   `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` and
   `SNOWFLAKE_HOST` apply too. Set `SNOWFLAKE_WAREHOUSE` unless the user has a
   default warehouse: the `GENERATOR` partition probes need one.
-- `tests/smoke/test_submissions.py` and `tests/smoke/test_identifier_case.py`
+- `tests/smoke/test_submissions.py`, `tests/smoke/test_identifier_case.py` and
+  `tests/smoke/test_multi_statement.py`
   write. They also need `SNOWFLAKE_LIVE_DML=1` and an explicit
   `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` and `SNOWFLAKE_WAREHOUSE` naming a
   disposable test namespace, and read the same optional passphrase, role and
   host variables. They create and drop their own uniquely named tables, and
   `test_submissions.py` a stored procedure too, so the role needs `CREATE TABLE`
-  and `CREATE PROCEDURE` on that schema. Both spend warehouse time.
+  and `CREATE PROCEDURE` on that schema. These probes spend warehouse time.
+  The multi-statement rollback probe also requires AUTOCOMMIT TRUE and recent
+  query-history evidence of its body statements. See `RELEASING.md` for the
+  complete gate and private evidence retention.
 
 Never commit private keys, `.gitignore` excludes `*.pem` / `*.p8` /
 `*private_key*`.

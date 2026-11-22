@@ -160,3 +160,58 @@ client = SnowflakeClient(
 fake.submitted_statements   # list of SQL strings submitted, in order
 fake.requests               # every httpx.Request the fake handled
 ```
+
+## Multi-statement fixtures
+
+Register each successful individual result first, then compose them:
+
+```python
+fake = FakeSnowflake()
+fake.register("SELECT 1 AS n", [{"N": 1}], partitions=1)
+fake.register_dml("DELETE FROM events", 2)
+fake.register_multi(["SELECT 1 AS n", "DELETE FROM events"])
+
+with make_client(fake) as client:
+    result = client.execute_statements(["SELECT 1 AS n", "DELETE FROM events"])
+    assert result.results[0].rows == [{"N": 1}]
+```
+
+`register_multi()` returns the fake for chaining and uses the client's exact
+newline/delimiter convention. Multiple entries produce a parent response with
+ordered child handles and independent GET/partition fixtures. One entry retains
+the ordinary single-result shape. The fake checks the explicit count and absence
+of bindings. It does not interpret SQL or prove transaction rollback. An
+explicit `register_error("\n;\n".join(statements), "failure")` registers a
+parent failure instead. Async clients use the same fixtures. For transaction
+fixtures, register `ALTER SESSION SET TRANSACTION_ABORT_ON_ERROR=TRUE`,
+`BEGIN TRANSACTION`, each body statement, and `COMMIT` separately, then compose
+that full sequence. The count is `len(body) + 3`; body results start at index 2.
+
+A one-entry `register_multi([sql])` replaces the individual fixture at that exact
+SQL key. It requires an explicit count even though the real server defaults an
+omitted count to one. A plain `client.query(sql)` therefore fails that strict
+fixture's guard. Use separate fake instances for independent strict tests.
+
+When ordinary and one-entry batch calls share SQL in a test, keep the individual
+registration and assert the batch request explicitly:
+
+```python
+import json
+
+sql = "SELECT 1 AS n"
+fake = FakeSnowflake().register(sql, [{"N": 1}])
+with make_client(fake) as client:
+    assert client.query(sql) == [{"N": 1}]
+    result = client.execute_statements([sql])
+    assert result.results[0].rows == [{"N": 1}]
+
+payload = json.loads(fake.requests[-1].content)
+assert payload["parameters"]["MULTI_STATEMENT_COUNT"] == "1"
+assert "bindings" not in payload
+```
+
+Individual fixtures do not enforce batch count or bindings. These request
+assertions supply that coverage. A malformed one-entry batch without a count can
+be identical to an ordinary request, so the fake cannot infer which API the
+caller intended. Multi-entry compositions normally use a separate joined SQL
+key and leave individual fixtures available.

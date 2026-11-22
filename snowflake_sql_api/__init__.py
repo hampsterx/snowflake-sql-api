@@ -26,9 +26,9 @@ except ImportError:  # pragma: no cover - plain source checkout, never built
     except PackageNotFoundError:
         __version__ = "0.0.0.dev0"
 
-from .aclient import AsyncQueryHandle, AsyncSnowflakeClient
+from .aclient import AsyncMultiStatementHandle, AsyncQueryHandle, AsyncSnowflakeClient
 from .batches import BatchSummary, BatchWriteResult, FailedBatch
-from .client import QueryHandle, SnowflakeClient
+from .client import MultiStatementHandle, QueryHandle, SnowflakeClient
 from .exceptions import (
     BatchWriteError,
     ResultNotReady,
@@ -36,11 +36,13 @@ from .exceptions import (
     SnowflakeConfigError,
     SnowflakeError,
     SnowflakeForbiddenError,
+    SnowflakeMultiStatementError,
     SnowflakeProgrammingError,
     SnowflakeRequestError,
     SnowflakeRetryError,
     SnowflakeTimeoutError,
 )
+from .multi_statement import MultiStatementResult, StatementResult
 from .retry import RetryPolicy
 
 __all__ = [
@@ -50,6 +52,11 @@ __all__ = [
     "QueryHandle",
     "AsyncQueryHandle",
     "RetryPolicy",
+    "MultiStatementHandle",
+    "AsyncMultiStatementHandle",
+    "MultiStatementResult",
+    "StatementResult",
+    "SnowflakeMultiStatementError",
     "BatchSummary",
     "BatchWriteResult",
     "FailedBatch",

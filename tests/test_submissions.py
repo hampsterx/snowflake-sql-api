@@ -517,3 +517,57 @@ async def test_non_library_submission_error_keeps_original_type_and_no_id(
         assert original.submission_attempts == 1
         assert len(requests) == 1
         assert requests[0].url.params["requestId"] == SAVED_ID
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "execute",
+        "insert_many",
+        "insert_batches",
+        "submit",
+        "resubmit",
+        "execute_statements",
+        "execute_transaction",
+        "submit_statements",
+    ],
+)
+async def test_regression_lost_response_then_handleless_200_is_unknown(
+    async_mode, private_key_pem, operation
+):
+    from snowflake_sql_api import BatchWriteError, SnowflakeMultiStatementError
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.ReadError("lost response", request=request)
+        return httpx.Response(200, json={})
+
+    async with client_for(async_mode, private_key_pem, respond) as client:
+        with pytest.raises(SnowflakeError) as caught:
+            if operation in ("insert_many", "insert_batches"):
+                result = getattr(client, operation)("events", ["id"], [[1]])
+            elif operation in ("submit", "resubmit"):
+                result = getattr(client, operation)(SQL, [1, "x"], request_id=SAVED_ID)
+            elif operation.endswith("statements") or operation == "execute_transaction":
+                result = getattr(client, operation)(["INSERT INTO events VALUES (1)"])
+            else:
+                result = client.execute(SQL, [1, "x"])
+            await value(result)
+    error = caught.value
+    if isinstance(error, BatchWriteError):
+        assert error.outcome == "unknown" and error.phase == "submission"
+        assert error.failed_batch.submission_attempts == 2
+        assert error.failed_batch.request_id == requests[0].url.params["requestId"]
+        error = error.__cause__
+    elif isinstance(error, SnowflakeMultiStatementError):
+        assert error.outcome == "unknown" and error.phase == "submission"
+        assert error.completed_results == () and error.failed_index is None
+    assert error.status_code == 200 and error.submission_attempts == 2
+    assert error.request_id == requests[0].url.params["requestId"]
+    assert len(requests) == 2
+    assert requests[1].content == requests[0].content
+    assert requests[1].url.params["requestId"] == requests[0].url.params["requestId"]
+    assert requests[1].url.params["retry"] == "true"

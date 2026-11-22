@@ -24,7 +24,8 @@ git fetch origin
 git switch master && git pull --ff-only
 
 # after configuring the disposable namespace described below
-python scripts/live_smoke.py
+smoke_evidence_dir="$(mktemp -d "$HOME/snowflake-smoke.XXXXXXXX")"
+python scripts/live_smoke.py --junitxml="$smoke_evidence_dir/results.xml"
 # continue only if the gate exits 0; tag the same commit that passed
 git tag v0.1.0
 git push origin v0.1.0
@@ -63,32 +64,52 @@ Set these variables in your shell before running the gate:
 - `tests/smoke/test_submissions.py`: the same credentials,
   `SNOWFLAKE_LIVE_DML=1`, and explicit `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`,
   `SNOWFLAKE_WAREHOUSE` for the disposable namespace.
-- `tests/smoke/test_identifier_case.py`: the same requirements as
-  `test_submissions.py`.
+- `tests/smoke/test_identifier_case.py` and
+  `tests/smoke/test_multi_statement.py`: the same requirements as
+  `test_submissions.py`. The multi-statement probes also require `CREATE TABLE`
+  for disposable transient and temporary tables, and verify transaction rollback,
+  lock release, and batch replay observations.
 
 The combined gate requires all six named credential/namespace variables, plus
-`SNOWFLAKE_LIVE_DML=1`, even if the user has defaults. All three files' opt-in
+`SNOWFLAKE_LIVE_DML=1`, even if the user has defaults. All four files' opt-in
 checks require the key path. `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`, `SNOWFLAKE_ROLE`
 and `SNOWFLAKE_HOST` are optional for every file. Only `test_smoke.py` uses
 `from_env()`: it also accepts `SNOWFLAKE_PRIVATE_KEY` (inline PEM, taking precedence
-over the path); the two writing files read the key from the path directly. Use
+over the path); the three writing files read the key from the path directly. Use
 credentials for the intended test identity and keep keys out of git.
 
 From a checkout with the development dependencies installed, run:
 
 ```bash
-python scripts/live_smoke.py
+smoke_evidence_dir="$(mktemp -d "$HOME/snowflake-smoke.XXXXXXXX")"
+python scripts/live_smoke.py --junitxml="$smoke_evidence_dir/results.xml"
 ```
 
-The runner locates all three files relative to its checkout and refuses missing
+The runner locates all four files relative to its checkout and refuses missing
 variables or a nonempty `PYTEST_ADDOPTS` before starting pytest. It clears pytest's
 configured `addopts` and accepts no test-selection arguments. Success means exit
-code 0 with every collected probe passing in all three files, including the sync
+code 0 with every collected probe passing in all four files, including the sync
 and async cases. A skip during collection, setup or execution, an expected failure
 (or unexpected pass), a deselected test, or a file with no collected probes makes
 the gate fail. Test and collection failures also remain failures. Resolve the
 reported issue and rerun the whole gate before tagging; retain its output with the
-release evidence. Ordinary `pytest tests/smoke` still allows opt-in skips and does
+release evidence. The optional `--junitxml` writes probe properties using pytest's
+legacy JUnit format. Retain and review that XML privately: console success alone
+does not retain partial-failure replay counts or transaction history. The rollback
+probe requires both earlier writes to succeed in the same transaction before the
+intended divide-by-zero failure, plus an independent lock probe. Missing recent
+history fails rather than establishing rollback. It also records the effective
+AUTOCOMMIT observation and requires it to be TRUE; do not change account settings
+to make a probe pass. It records the abort-on-error default separately; only the
+independent lock probe establishes whether the helper's request-local setting
+releases locks after the intended failure. The example creates a private directory under your home,
+which persists across reboots; preserve it with the release records.
+Replay of a partially failed ordinary batch can repeat its prefix, and the
+recorded counts remain observations, not an exactly-once assertion.
+The replay probe accepts a handleless 200/202 only as a raised request error with
+an unknown outcome and the original request ID. Reporting it as success fails
+the gate; it must not be mislabeled as a reconstructed 422.
+Ordinary `pytest tests/smoke` still allows opt-in skips and does
 not enforce this release gate.
 
 ## One-time prerequisites

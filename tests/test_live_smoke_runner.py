@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,12 @@ REQUIRED = (
     "SNOWFLAKE_WAREHOUSE",
     "SNOWFLAKE_LIVE_DML",
 )
-FILES = ("test_smoke.py", "test_submissions.py", "test_identifier_case.py")
+FILES = (
+    "test_smoke.py",
+    "test_submissions.py",
+    "test_identifier_case.py",
+    "test_multi_statement.py",
+)
 
 
 @pytest.fixture
@@ -42,9 +48,9 @@ def smoke_tree(tmp_path, monkeypatch):
     return tmp_path
 
 
-def run_smoke(tree):
+def run_smoke(tree, *args):
     return subprocess.run(
-        [sys.executable, str(tree / "scripts" / "live_smoke.py")],
+        [sys.executable, str(tree / "scripts" / "live_smoke.py"), *args],
         cwd=tree.parent,  # The runner must resolve its suite independently of cwd.
         capture_output=True,
         text=True,
@@ -89,7 +95,7 @@ def test_live_smoke_all_pass(smoke_tree):
     (smoke_tree / "pytest.ini").write_text("[pytest]\naddopts = -k nothing\n")
     result = run_smoke(smoke_tree)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "3 passed" in result.stdout
+    assert "4 passed" in result.stdout
 
 
 @pytest.mark.parametrize("name", FILES)
@@ -122,3 +128,29 @@ def test_live_smoke_deselection_fails(smoke_tree):
     result = run_smoke(smoke_tree)
     assert result.returncode != 0, result.stdout + result.stderr
     assert "incomplete" in result.stdout
+
+
+@pytest.mark.regression
+def test_regression_live_smoke_retains_probe_observations(smoke_tree):
+    for name in FILES:
+        (smoke_tree / "tests" / "smoke" / name).write_text(
+            "def test_probe(record_property):\n"
+            f"    record_property('observation', '{name}')\n"
+        )
+    output = smoke_tree / "private results.xml"
+    result = run_smoke(smoke_tree, "--junitxml", str(output))
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = ET.parse(output).getroot()
+    assert {p.attrib["value"] for p in root.findall(".//property")} == set(FILES)
+    assert len(root.findall(".//testcase")) == 4
+
+
+@pytest.mark.parametrize(
+    "selection", [["-k", "nothing"], ["tests/smoke/test_smoke.py"]]
+)
+def test_live_smoke_evidence_option_cannot_select_tests(smoke_tree, selection):
+    result = run_smoke(
+        smoke_tree, "--junitxml", str(smoke_tree / "out.xml"), *selection
+    )
+    assert result.returncode == 2
+    assert "test session starts" not in result.stdout
